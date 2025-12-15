@@ -1,3 +1,4 @@
 mod merkle;
+mod transcript;
 
-pub use merkle::{MerkleError, MerkleTree};
+pub use merkle::{Digest, MerkleError, MerkleTree};
