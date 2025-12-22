@@ -1,6 +1,6 @@
 use crate::backend::Transcript;
 use ark_ff::{FftField, Field, PrimeField};
-use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
+use ark_poly::{EvaluationDomain, GeneralEvaluationDomain, Radix2EvaluationDomain};
 use ark_std::iterable::Iterable;
 
 pub struct TraceTable<F: Field> {
@@ -68,13 +68,15 @@ impl<'a, F: Field + Copy> RowView<'a, F> {
 
 pub type ConstraintFunction<F> = fn(&RowView<F>) -> F;
 
-pub fn build_check_evals<F: PrimeField + FftField>(
+pub fn prove<F: PrimeField + FftField>(
     trace: &TraceTable<F>,
-    domain: GeneralEvaluationDomain<F>,
+    domain_n: GeneralEvaluationDomain<F>,
+    domain_m: GeneralEvaluationDomain<F>,
+    shift: F,
     tx: &mut Transcript,
     constraints: &[ConstraintFunction<F>],
 ) -> Vec<F> {
-    let n = domain.size();
+    let n = domain_n.size();
     assert_eq!(n, trace.n(), "trace length must be equal to domain size");
 
     tx.absorb_params(n, 1, 1);
@@ -84,13 +86,42 @@ pub fn build_check_evals<F: PrimeField + FftField>(
     }
 
     let evaluations = vec![F::zero(); n];
-    for t in 0..n {
-        let rv = RowView { t, n, trace };
-        let mut acc = F::zero();
-        for (alpha, f) in alphas.iter().zip(constraints.iter()) {
-            acc += *alpha * f(&rv);
-        }
-        evaluations[t] = acc;
+    let disguised_evaluations = vec![vec![]; trace.columns.len()];
+    for (i, column) in trace.columns.iter().enumerate() {
+        disguised_evaluations[i] = lde_extend_column(column, &domain_n, &domain_m, shift);
     }
+    // TODO: commit disguised table
+    // TODO: derive challenges
+    // TODO: compute verification poly
+    // TODO: FRI prove it
+
     evaluations
+}
+
+/// Generate LDE of a column, by iFFting evaluations on N to coefficients, scaling them with a shift factor
+/// and finally FFTing them back on the extended domain
+fn lde_extend_column<F: Field>(
+    column: &[F],
+    domain_n: &Radix2EvaluationDomain<F>,
+    domain_m: &Radix2EvaluationDomain<F>,
+    shift: F,
+) -> Vec<F> {
+    assert_eq!(domain_n.len(), column.len());
+    assert_eq!(domain_m.size % domain_n.size, 0);
+
+    // interpolating column over domain n
+    let mut coeffs = column.to_vec();
+    domain_n.ifft_in_place(&mut coeffs);
+
+    // scaling coefficients by shift^k so LDE is f(sx)
+    let mut pow = F::one();
+    for c in coeffs.iter_mut() {
+        *c *= pow;
+        pow *= shift;
+    }
+
+    // scale and fft to the LDE domain
+    coeffs.resize(domain_m.size as usize, F::zero());
+    domain_m.fft_in_place(&mut coeffs);
+    coeffs
 }
