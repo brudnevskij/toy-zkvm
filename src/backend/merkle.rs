@@ -24,6 +24,7 @@ pub trait Hasher {
 
 #[derive(Debug)]
 pub struct Blake3Hasher;
+
 impl Hasher for Blake3Hasher {
     fn hash_leaf(data: &[u8]) -> Digest {
         let mut hasher = blake3::Hasher::new();
