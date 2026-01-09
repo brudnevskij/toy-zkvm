@@ -276,10 +276,20 @@ pub fn verify<F: PrimeField + FftField>(
         betas.push(beta);
     }
 
-    // final_poly must have at least r+1 coefficients
+    // finall poly degree assertions
     if proof.final_poly.len() < options.max_remainder_degree + 1 {
         return Err(VerificationError::BadProof);
     }
+    for c in proof
+        .final_poly
+        .iter()
+        .skip(options.max_remainder_degree + 1)
+    {
+        if !c.is_zero() {
+            return Err(VerificationError::VerificationFailed);
+        }
+    }
+
     // TODO: handle error
     let final_tree = commit_evals(&proof.final_poly).unwrap();
     tx.absorb_digest("fri/final_poly", &final_tree.root());
