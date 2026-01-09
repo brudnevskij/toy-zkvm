@@ -1,5 +1,3 @@
-use std::{option, usize};
-
 use crate::backend::Transcript;
 use crate::backend::{AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, verify_row};
 use ark_ff::{FftField, Field, PrimeField};
@@ -100,6 +98,11 @@ pub fn prove<F: PrimeField + FftField>(
     // TODO: make num of queries scalable, move to options
     let num_queries = 1;
     tx.absorb_params(initial_domain_size, 1, num_queries);
+    tx.absorb_bytes("fri/max_degree", &options.max_degree.to_le_bytes());
+    tx.absorb_bytes(
+        "fri/max_remainder_degree",
+        &options.max_remainder_degree.to_le_bytes(),
+    );
 
     let mut evaluations_layers = vec![];
     let mut roots = vec![];
@@ -134,10 +137,15 @@ pub fn prove<F: PrimeField + FftField>(
 
     // interpolating final poly
     let final_domain_size = initial_domain_size >> roots.len(); // N / 2^n_folds
+    assert_eq!(final_domain_size, evals_i.len());
+    assert!(final_domain_size >= options.max_remainder_degree + 1);
+
     // TODO: handle error
     let final_domain = Radix2EvaluationDomain::new(final_domain_size).unwrap();
     assert_eq!(g, final_domain.group_gen());
     let final_poly = final_domain.ifft(&evals_i);
+    assert!(final_poly.len() <= options.max_degree);
+
     let final_tree = commit_evals(&final_poly)?;
     tx.absorb_digest("fri/final_poly", final_tree.root());
 
@@ -255,7 +263,11 @@ pub fn verify<F: PrimeField + FftField>(
 
     let num_queries = proof.queries.len();
     tx.absorb_params(n0, 1, num_queries);
-
+    tx.absorb_bytes("fri/max_degree", &options.max_degree.to_le_bytes());
+    tx.absorb_bytes(
+        "fri/max_remainder_degree",
+        &options.max_remainder_degree.to_le_bytes(),
+    );
     let inv2 = F::from(2u64).inverse().expect("inverse");
     let mut betas = Vec::with_capacity(proof.roots.len());
     for root in &proof.roots {
@@ -263,12 +275,21 @@ pub fn verify<F: PrimeField + FftField>(
         let beta: F = tx.challenge_field("fri/beta_i");
         betas.push(beta);
     }
+
+    // final_poly must have at least r+1 coefficients
+    if proof.final_poly.len() < options.max_remainder_degree + 1 {
+        return Err(VerificationError::BadProof);
+    }
     // TODO: handle error
     let final_tree = commit_evals(&proof.final_poly).unwrap();
     tx.absorb_digest("fri/final_poly", &final_tree.root());
     let mut g = domain.group_gen();
 
     let final_domain_size = n0 >> proof.roots.len(); // n0 / 2^k
+    if final_domain_size < options.max_remainder_degree + 1 {
+        return Err(VerificationError::BadProof);
+    }
+
     let final_domain =
         Radix2EvaluationDomain::<F>::new(final_domain_size).ok_or(VerificationError::BadProof)?;
     let final_evals = final_domain.fft(&proof.final_poly);
