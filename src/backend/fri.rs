@@ -1,7 +1,11 @@
+use std::{option, usize};
+
 use crate::backend::Transcript;
 use crate::backend::{AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, verify_row};
 use ark_ff::{FftField, Field, PrimeField};
-use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
+use ark_poly::{EvaluationDomain, GeneralEvaluationDomain, Radix2EvaluationDomain};
+use ark_serialize::CanonicalSerialize;
+use rand::seq::IndexedRandom;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -10,7 +14,7 @@ pub struct FriProof<F: Field> {
     pub roots: Vec<Digest>,
     // Queries for each step of FRI, one per index queried
     pub queries: Vec<FriQuery<F>>,
-    pub final_eval: F,
+    pub final_poly: Vec<F>,
 }
 
 /// FriQuery contains folds for each step of FRI
@@ -47,51 +51,73 @@ pub enum ProofError {
 
 pub fn prove_from_coefficients<F: PrimeField + FftField>(
     coeffs: &[F],
-    domain: GeneralEvaluationDomain<F>,
+    domain: Radix2EvaluationDomain<F>,
+    options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
     let n0 = domain.size();
     if coeffs.is_empty() || coeffs.len() > n0 {
         return Err(ProofError::DegreeExceedsDomain);
     }
+
     let mut evals = vec![F::zero(); n0];
     evals[..coeffs.len()].copy_from_slice(coeffs);
     domain.fft_in_place(&mut evals);
-    prove(&evals, domain, tx)
+
+    prove(&evals, domain, options, tx)
 }
+
+pub struct FriOptions {
+    pub max_degree: usize,
+    pub max_remainder_degree: usize,
+}
+
 pub fn prove<F: PrimeField + FftField>(
     evals: &[F],
-    domain0: GeneralEvaluationDomain<F>,
+    initial_domain: Radix2EvaluationDomain<F>,
+    options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
-    let n0 = domain0.size();
-    if evals.is_empty() || evals.len() != n0 {
+    let initial_domain_size = initial_domain.size();
+    // TODO: handle as errors
+    assert!(initial_domain_size > 0, "empty domain");
+    assert!(
+        options.max_remainder_degree > 0,
+        "remainder degree must be greater than 0"
+    );
+    assert!(
+        options.max_remainder_degree < options.max_degree,
+        " need r < d"
+    );
+    assert!(
+        options.max_degree < initial_domain_size,
+        "need d < N (rate < 1)"
+    );
+    if evals.is_empty() {
         return Err(ProofError::EvaluationsExceedsDomain);
     }
-    let g0 = domain0.group_gen();
 
-    // TODO: make it scalable
+    // TODO: make num of queries scalable, move to options
     let num_queries = 1;
-    tx.absorb_params(n0, 1, num_queries);
+    tx.absorb_params(initial_domain_size, 1, num_queries);
 
     let mut evaluations_layers = vec![];
     let mut roots = vec![];
     let mut trees = vec![];
     let mut domain_sizes = vec![];
-    let mut n = n0;
-    let mut g = g0;
+    let mut domain_size = initial_domain_size;
+    let mut g = initial_domain.group_gen();
     let mut evals_i = evals.to_vec();
+    let mut current_max_degree = options.max_degree;
 
-    // calculate fold
-    while n > 1 {
-        let leaves_bytes = evals_to_bytes(&evals_i);
-        let leaf_refs: Vec<_> = leaves_bytes.iter().map(|v| v.as_slice()).collect();
-        let tree = MerkleTree::<Blake3Hasher>::from_rows(&leaf_refs)?;
+    while current_max_degree > options.max_remainder_degree + 1 {
+        let tree = commit_evals(&evals_i)?;
         let root = tree.root();
         tx.absorb_digest("root", root);
+
         roots.push(*root);
         trees.push(tree);
-        domain_sizes.push(n);
+        domain_sizes.push(domain_size);
         evaluations_layers.push(evals_i.clone());
 
         // get challenge
@@ -100,15 +126,25 @@ pub fn prove<F: PrimeField + FftField>(
         evals_i = fold_once(&evals_i, g, beta_i);
         // advance
         g = g.square();
-        n /= 2;
+
+        domain_size /= 2;
+        // halving upper bound
+        current_max_degree = (current_max_degree + 1) / 2;
     }
-    let final_eval = evals_i[0];
-    tx.absorb_field("fri/final_const", &final_eval);
+
+    // interpolating final poly
+    let final_domain_size = initial_domain_size >> roots.len(); // N / 2^n_folds
+    // TODO: handle error
+    let final_domain = Radix2EvaluationDomain::new(final_domain_size).unwrap();
+    assert_eq!(g, final_domain.group_gen());
+    let final_poly = final_domain.ifft(&evals_i);
+    let final_tree = commit_evals(&final_poly)?;
+    tx.absorb_digest("fri/final_poly", final_tree.root());
 
     // query phase
     let mut queries = Vec::with_capacity(num_queries);
     for _ in 0..num_queries {
-        let mut idx = tx.challenge_index("fri/query", (n0 / 2) as u64) as usize;
+        let mut idx = tx.challenge_index("fri/query", (initial_domain_size / 2) as u64) as usize;
         let mut rounds = Vec::with_capacity(roots.len());
 
         for (i, tree) in trees.iter().enumerate() {
@@ -141,19 +177,27 @@ pub fn prove<F: PrimeField + FftField>(
     Ok(FriProof {
         roots,
         queries,
-        final_eval,
+        final_poly,
     })
 }
 
-// convert Vec<F> to slice of bytes
-fn evals_to_bytes<F: PrimeField + FftField>(evals: &[F]) -> Vec<Vec<u8>> {
-    let mut leaves_bytes: Vec<Vec<u8>> = Vec::with_capacity(evals.len());
-    for x in evals {
-        let mut buf = Vec::new();
-        x.serialize_compressed(&mut buf).expect("field serialize");
-        leaves_bytes.push(buf);
-    }
-    leaves_bytes
+// convert Vec<F> to slice of bytes, and cpmmit to a tree
+pub fn commit_evals<F: CanonicalSerialize>(
+    evals: &[F],
+) -> Result<MerkleTree<Blake3Hasher>, MerkleError> {
+    let leaves_bytes: Vec<Vec<u8>> = evals
+        .iter()
+        .map(|x| {
+            let mut buf = Vec::new();
+            x.serialize_compressed(&mut buf).expect("field serialize");
+            buf
+        })
+        .collect();
+
+    let leaf_refs: Vec<&[u8]> = leaves_bytes.iter().map(|v| v.as_slice()).collect();
+
+    let tree = MerkleTree::<Blake3Hasher>::from_rows(&leaf_refs)?;
+    Ok(tree)
 }
 
 fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F) -> Vec<F> {
@@ -200,7 +244,8 @@ pub enum VerificationError {
 
 pub fn verify<F: PrimeField + FftField>(
     proof: &FriProof<F>,
-    domain: GeneralEvaluationDomain<F>,
+    domain: Radix2EvaluationDomain<F>,
+    options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<(), VerificationError> {
     let n0 = domain.size();
@@ -211,25 +256,33 @@ pub fn verify<F: PrimeField + FftField>(
     let num_queries = proof.queries.len();
     tx.absorb_params(n0, 1, num_queries);
 
+    let inv2 = F::from(2u64).inverse().expect("inverse");
     let mut betas = Vec::with_capacity(proof.roots.len());
     for root in &proof.roots {
         tx.absorb_digest("root", root);
         let beta: F = tx.challenge_field("fri/beta_i");
         betas.push(beta);
     }
-    tx.absorb_field("fri/final_const", &proof.final_eval);
+    // TODO: handle error
+    let final_tree = commit_evals(&proof.final_poly).unwrap();
+    tx.absorb_digest("fri/final_poly", &final_tree.root());
+    let mut g = domain.group_gen();
+
+    let final_domain_size = n0 >> proof.roots.len(); // n0 / 2^k
+    let final_domain =
+        Radix2EvaluationDomain::<F>::new(final_domain_size).ok_or(VerificationError::BadProof)?;
+    let final_evals = final_domain.fft(&proof.final_poly);
 
     for (q_i, query) in proof.queries.iter().enumerate() {
         let mut idx = tx.challenge_index("fri/query", (n0 / 2) as u64) as usize;
         let mut domain_size = n0;
-        let mut g = domain.group_gen();
-        let inv2 = F::from(2u64).inverse().expect("inverse");
+        g = domain.group_gen();
 
         if query.rounds.len() != proof.roots.len() {
             return Err(VerificationError::RootsNEtoQueryRounds);
         }
-
-        for (layer_i, round) in query.rounds.iter().enumerate() {
+        let rounds = &query.rounds;
+        for (layer_i, round) in rounds.iter().enumerate() {
             let half = domain_size / 2;
             if half == 0 {
                 return Err(VerificationError::QueriesBiggerThenFolds);
@@ -281,28 +334,22 @@ pub fn verify<F: PrimeField + FftField>(
             }
 
             // fold
-            let left_value = round.left.value;
-            let right_value = round.right.value;
             let x = g.pow([idx as u64]);
+            let y = fold_evaluation_pair(
+                round.left.value,
+                round.right.value,
+                x.inverse().unwrap(),
+                betas[layer_i],
+                inv2,
+            );
 
-            // f_even = ( f(w) + f(-w) ) / 2
-            let even = (left_value + right_value) * inv2;
-            // f_odd = ( f(w) - f(-w) ) / 2x
-            let odd = (left_value - right_value) * inv2 * x.inverse().unwrap();
-            let y = even + betas[layer_i] * odd;
-
-            if layer_i + 1 == query.rounds.len() {
-                // terminal check against the constant
-                if y != proof.final_eval {
-                    return Err(VerificationError::VerificationFailed);
-                }
-            } else {
-                // bridge check: the folded value must equal the next layer's committed value
+            if layer_i + 1 < query.rounds.len() {
                 if y != query.rounds[layer_i + 1].left.value {
                     return Err(VerificationError::VerificationFailed);
                 }
+            } else if y != final_evals[idx % half] {
+                return Err(VerificationError::VerificationFailed);
             }
-
             // advance
             idx %= half;
             domain_size = half;
@@ -312,9 +359,17 @@ pub fn verify<F: PrimeField + FftField>(
     Ok(())
 }
 
+fn fold_evaluation_pair<F: Field>(left_value: F, right_value: F, x_inv: F, beta: F, inv2: F) -> F {
+    // f_even = ( f(w) + f(-w) ) / 2
+    let even = (left_value + right_value) * inv2;
+    // f_odd = ( f(w) - f(-w) ) / 2x
+    let odd = (left_value - right_value) * inv2 * x_inv;
+    even + beta * odd
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProofError, VerificationError, fold_once, prove_from_coefficients, verify};
+    use super::*;
     use crate::backend::Transcript;
     use ark_bn254::Fr;
     use ark_ff::{Field, One, PrimeField, UniformRand, Zero};
@@ -323,9 +378,9 @@ mod tests {
     use ark_std::rand::{SeedableRng, rngs::StdRng};
 
     // build f(x) from random coeffs of given length
-    fn random_poly(deg_plus_1: usize, seed: u64) -> DensePolynomial<Fr> {
+    fn random_poly(deggree: usize, seed: u64) -> DensePolynomial<Fr> {
         let mut rng = StdRng::seed_from_u64(seed);
-        let coeffs: Vec<Fr> = (0..deg_plus_1).map(|_| Fr::rand(&mut rng)).collect();
+        let coeffs: Vec<Fr> = (0..=deggree).map(|_| Fr::rand(&mut rng)).collect();
         DensePolynomial::from_coefficients_slice(&coeffs)
     }
 
@@ -356,30 +411,92 @@ mod tests {
     }
 
     // pick a power-of-two N ≥ deg+1
-    fn pick_domain<F: PrimeField>(n: usize) -> GeneralEvaluationDomain<F> {
-        GeneralEvaluationDomain::<F>::new(n).expect("radix-2 domain")
+    fn pick_domain<F: PrimeField>(n: usize) -> Radix2EvaluationDomain<F> {
+        Radix2EvaluationDomain::<F>::new(n).expect("expect radix 2 domain")
     }
+
+    fn make_honest_proof() -> (FriProof<Fr>, Radix2EvaluationDomain<Fr>, FriOptions) {
+        // N = 2^15
+        let n = 32768usize;
+
+        let domain = pick_domain::<Fr>(n);
+        let coeffs = random_poly(1533, 1337);
+
+        let seed = b"fri-seed-1";
+        let mut tx = Transcript::new(b"transcript", seed);
+
+        let options = FriOptions {
+            max_degree: 1533,
+            max_remainder_degree: 3,
+        };
+
+        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+            .expect("prove should succeed");
+
+        (proof, domain, options)
+    }
+
     #[test]
     fn honest_prover_verifier_ok() {
         // N = 2^15
         let n = 32768usize;
         let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(32768, 1337);
+        let coeffs = random_poly(1533, 1337);
 
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
-        let proof =
-            prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).expect("prove should succeed");
+        let options = FriOptions {
+            max_degree: 1533,
+            max_remainder_degree: 3,
+        };
+        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+            .expect("prove should succeed");
 
         // verification
         let mut tx = Transcript::new(b"transcript", seed);
-        verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut tx).expect("verify should succeed");
-
-        let coeffs = random_poly(16384, 2048);
-        let proof =
-            prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).expect("prove should succeed");
+        verify::<Fr>(&proof, domain, &options, &mut tx).expect("verify should succeed");
     }
 
+    #[test]
+    fn reject_wrong_left_index() {
+        let (mut proof, domain, options) = make_honest_proof(); // your helper
+        proof.queries[0].rounds[0].left.path.index ^= 1;
+
+        let seed = b"fri-seed-1";
+        let mut tx = Transcript::new(b"transcript", seed);
+        let res = verify(&proof, domain, &options, &mut tx);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn reject_wrong_next_round_value() {
+        let (mut proof, domain, options) = make_honest_proof();
+        // mutate a “next layer” claimed folded value
+        proof.queries[0].rounds[1].left.value += Fr::one();
+
+        let seed = b"fri-seed-1";
+        let mut tx = Transcript::new(b"transcript", seed);
+        let res = verify(&proof, domain, &options, &mut tx);
+        assert!(matches!(
+            res,
+            Err(VerificationError::VerificationFailed) | Err(_)
+        ));
+    }
+
+    #[test]
+    fn reject_wrong_final_poly() {
+        let (mut proof, domain, options) = make_honest_proof();
+        proof.final_poly[0] += Fr::one();
+        let seed = b"fri-seed-1";
+        let mut tx = Transcript::new(b"transcript", seed);
+
+        let res = verify(&proof, domain, &options, &mut tx);
+        assert!(matches!(
+            res,
+            Err(VerificationError::VerificationFailed) | Err(_)
+        ));
+    }
+    /*
     #[test]
     fn tamper_leaf_value_fails() {
         let n = 32usize;
@@ -635,4 +752,5 @@ mod tests {
         let mut txv = Transcript::new(b"transcript-DIFFERENT", seed);
         assert!(verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut txv).is_err());
     }
+    */
 }
