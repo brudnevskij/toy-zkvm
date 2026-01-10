@@ -143,8 +143,12 @@ pub fn prove<F: PrimeField + FftField>(
     // TODO: handle error
     let final_domain = Radix2EvaluationDomain::new(final_domain_size).unwrap();
     assert_eq!(g, final_domain.group_gen());
-    let final_poly = final_domain.ifft(&evals_i);
-    assert!(final_poly.len() <= options.max_degree);
+    let mut final_poly = final_domain.ifft(&evals_i);
+    trim_trailing_zeroes(&mut final_poly);
+    assert!(
+        final_poly.len() <= options.max_remainder_degree,
+        "final poly degree must be less than max remainder degree"
+    );
 
     let final_tree = commit_evals(&final_poly)?;
     tx.absorb_digest("fri/final_poly", final_tree.root());
@@ -232,10 +236,18 @@ fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F) -> Vec<F> {
     out
 }
 
+fn trim_trailing_zeroes<F: PrimeField>(v: &mut Vec<F>) {
+    while v.last() == Some(&F::zero()) {
+        v.pop();
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum VerificationError {
     #[error("bad init params")]
     BadProof,
+    #[error("final polynomial exceeds max remainder degree")]
+    FinalPolynomialExceedMaxRemainderDegree,
     #[error("roots len != rounds")]
     RootsNEtoQueryRounds,
     #[error("domain folded to constant sooner than expected")]
@@ -277,8 +289,8 @@ pub fn verify<F: PrimeField + FftField>(
     }
 
     // finall poly degree assertions
-    if proof.final_poly.len() < options.max_remainder_degree + 1 {
-        return Err(VerificationError::BadProof);
+    if proof.final_poly.len() < options.max_remainder_degree {
+        return Err(VerificationError::FinalPolynomialExceedMaxRemainderDegree);
     }
     for c in proof
         .final_poly
@@ -508,10 +520,7 @@ mod tests {
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
         let res = verify(&proof, domain, &options, &mut tx);
-        assert!(matches!(
-            res,
-            Err(VerificationError::VerificationFailed) | Err(_)
-        ));
+        assert!(matches!(res, Err(VerificationError::VerificationFailed)));
     }
 
     #[test]
@@ -524,264 +533,31 @@ mod tests {
         let res = verify(&proof, domain, &options, &mut tx);
         assert!(matches!(
             res,
-            Err(VerificationError::VerificationFailed) | Err(_)
+            Err(VerificationError::MerkleAuthError { .. })
         ));
     }
-    /*
+
     #[test]
-    fn tamper_leaf_value_fails() {
-        let n = 32usize;
+    fn higher_degree_reject() {
+        // N = 2^15
+        let n = 32768usize;
         let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(10, 2024);
+        let coeffs = random_poly(1533, 1337);
 
-        let seed = b"fri-seed-2";
+        let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
-        let mut proof = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).expect("prove ok");
-
-        // mutate the first query's first round left value
-        if let Some(q) = proof.queries.get_mut(0) {
-            if let Some(r0) = q.rounds.get_mut(0) {
-                r0.left.value += Fr::one();
-            }
-        }
+        let options = FriOptions {
+            max_degree: 1000,
+            max_remainder_degree: 100,
+        };
+        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+            .expect("should succeed");
 
         let mut tx = Transcript::new(b"transcript", seed);
-        let err = verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut tx).unwrap_err();
+        let res = verify(&proof, domain, &options, &mut tx);
         assert!(matches!(
-            err,
-            VerificationError::MerkleAuthError {
-                query: _,
-                layer: _,
-                index: _
-            }
+            res,
+            Err(VerificationError::FinalPolynomialExceedMaxRemainderDegree)
         ));
     }
-
-    #[test]
-    fn tamper_merkle_path_fails() {
-        let n = 32usize;
-        let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(9, 77);
-
-        let seed = b"fri-seed-3";
-        let mut tx = Transcript::new(b"transcript", seed);
-        let mut proof = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).expect("prove ok");
-
-        // flip one byte in the first path’s first node
-        if let Some(q) = proof.queries.get_mut(0) {
-            if let Some(r0) = q.rounds.get_mut(0) {
-                if let Some(first_node) = r0.left.path.nodes.get_mut(0) {
-                    first_node[0] ^= 0x01;
-                }
-            }
-        }
-
-        let mut tx = Transcript::new(b"transcript", seed);
-        let err = verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut tx).unwrap_err();
-        assert!(matches!(
-            err,
-            VerificationError::MerkleAuthError {
-                query: _,
-                layer: _,
-                index: _
-            }
-        ));
-    }
-
-    #[test]
-    fn tamper_root_fails() {
-        let n = 32usize;
-        let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(7, 55);
-
-        let seed = b"fri-seed-4";
-        let mut tx = Transcript::new(b"transcript", seed);
-        let mut proof = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).expect("prove ok");
-
-        // Corrupt the first root
-        if let Some(root0) = proof.roots.get_mut(0) {
-            root0[0] ^= 0x42;
-        }
-
-        let mut tx = Transcript::new(b"transcript", seed);
-        let err = verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut tx).unwrap_err();
-        assert!(matches!(
-            err,
-            VerificationError::MerkleAuthError {
-                query: _,
-                layer: _,
-                index: _
-            }
-        ));
-    }
-
-    #[test]
-    fn degree_exceeds_domain_errors() {
-        let n = 16usize;
-        let domain = pick_domain::<Fr>(n);
-
-        let coeffs = random_poly(n + 1, 9999);
-        let seed = b"fri-seed-5";
-        println!("{}", coeffs.len());
-
-        let mut tx = Transcript::new(b"transcript", seed);
-        let err = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).unwrap_err();
-        assert!(matches!(err, ProofError::DegreeExceedsDomain));
-    }
-
-    #[test]
-    fn determinism_same_seed_same_proof_shape() {
-        let n = 64usize;
-        let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(11, 4242);
-        let seed = b"fri-seed-6";
-
-        let mut tx1 = Transcript::new(b"transcript", seed);
-        let mut tx2 = Transcript::new(b"transcript", seed);
-        let p1 = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx1).expect("prove ok");
-        let p2 = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx2).expect("prove ok");
-
-        assert_eq!(p1.roots.len(), p2.roots.len());
-        assert_eq!(p1.queries.len(), p2.queries.len());
-
-        assert_eq!(p1.final_eval, p2.final_eval);
-    }
-
-    #[test]
-    fn fold_matches_even_odd_combo_small() {
-        let n = 16usize;
-        let domain = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
-
-        let f = random_poly(10, 1337);
-        // compute evals on D0 directly (not FFT), to be agnostic
-        let g = domain.group_gen();
-        let mut x = domain.element(0);
-        let mut evals = Vec::with_capacity(n);
-        for i in 0..n {
-            if i > 0 {
-                x *= g;
-            }
-            evals.push(eval_poly(&f, x));
-        }
-
-        // random beta
-        let mut rng = StdRng::seed_from_u64(42);
-        let beta = Fr::rand(&mut rng);
-
-        let folded = fold_once(&evals, g, beta);
-
-        // expected: u(Y) = g(Y) + beta * h(Y), evaluated at Y = x_j^2
-        let (g_poly, h_poly) = even_odd_split(&f);
-        let u_poly = DensePolynomial::from_coefficients_vec({
-            // u = g + beta*h
-            let (mut u, m) = (g_poly.clone(), h_poly.clone());
-            let mut coeffs = u.coeffs;
-            if coeffs.len() < m.coeffs.len() {
-                coeffs.resize(m.coeffs.len(), Fr::zero());
-            }
-            for (k, c) in m.coeffs.iter().enumerate() {
-                coeffs[k] += *c * beta;
-            }
-            coeffs
-        });
-
-        let half = n / 2;
-        let mut xj = domain.element(0);
-        let mut expected = Vec::with_capacity(half);
-        for j in 0..half {
-            if j > 0 {
-                xj *= g;
-            }
-            let y = xj.square();
-            expected.push(eval_poly(&u_poly, y));
-        }
-
-        assert_eq!(folded.len(), half);
-        assert_eq!(expected.len(), half);
-        for (a, b) in folded.iter().zip(expected.iter()) {
-            assert_eq!(a, b, "mismatch at some index");
-        }
-    }
-
-    #[test]
-    fn fold_beta_zero_is_even_average() {
-        let n = 8usize;
-        let domain = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
-
-        // build any polynomial and eval on grid
-        let f = random_poly(6, 7);
-        let g = domain.group_gen();
-        let mut x = domain.element(0);
-        let mut evals = Vec::with_capacity(n);
-        for i in 0..n {
-            if i > 0 {
-                x *= g;
-            }
-            evals.push(eval_poly(&f, x));
-        }
-
-        // beta = 0 ⇒ f* = (f(x)+f(-x))/2
-        let beta = Fr::zero();
-        let folded = fold_once(&evals, g, beta);
-
-        let inv2 = Fr::from(2u64).inverse().unwrap();
-        let mut expected = Vec::with_capacity(n / 2);
-        for i in 0..(n / 2) {
-            expected.push((evals[i] + evals[i + n / 2]) * inv2);
-        }
-
-        assert_eq!(folded, expected);
-    }
-
-    #[test]
-    fn pairing_invariant_minus_x_is_shift_by_half() {
-        let n = 32usize;
-        let domain = GeneralEvaluationDomain::<Fr>::new(n).unwrap();
-        let g = domain.group_gen();
-        let mut x = domain.element(0);
-
-        // check that x_{i + n/2} = -x_i
-        let half = n / 2;
-        let mut xs: Vec<Fr> = Vec::with_capacity(n);
-        for i in 0..n {
-            if i > 0 {
-                x *= g;
-            }
-            xs.push(x);
-        }
-        for i in 0..half {
-            assert_eq!(xs[i + half], -xs[i]);
-        }
-    }
-
-    #[test]
-    fn tamper_path_index_fails() {
-        let n = 32usize;
-        let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(10, 1);
-        let seed = b"fri-seed-x";
-
-        let mut tx = Transcript::new(b"transcript", seed);
-        let mut proof = prove_from_coefficients::<Fr>(&coeffs, domain, &mut tx).unwrap();
-
-        proof.queries[0].rounds[0].left.path.index ^= 1;
-
-        let mut txv = Transcript::new(b"transcript", seed);
-        assert!(verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut txv).is_err());
-    }
-
-    #[test]
-    fn different_transcript_label_fails() {
-        let n = 32usize;
-        let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(10, 1);
-        let seed = b"fri-seed";
-
-        let mut txp = Transcript::new(b"transcript", seed);
-        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &mut txp).unwrap();
-
-        let mut txv = Transcript::new(b"transcript-DIFFERENT", seed);
-        assert!(verify::<Fr>(&proof, pick_domain::<Fr>(n), &mut txv).is_err());
-    }
-    */
 }
