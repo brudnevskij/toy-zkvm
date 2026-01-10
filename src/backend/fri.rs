@@ -43,8 +43,10 @@ pub struct Opened<F: Field> {
 pub enum ProofError {
     #[error("polynomial degree is bigger then domain")]
     DegreeExceedsDomain,
-    #[error("evaluations length exceeds domain")]
-    EvaluationsExceedsDomain,
+    #[error("unexpected evaluations length got: {got}, expected: {expected}")]
+    BadEvaluationsLength { got: usize, expected: usize },
+    #[error("empty evaluations")]
+    EmptyEvaluations,
 
     #[error(transparent)]
     Merkle(#[from] MerkleError),
@@ -95,7 +97,13 @@ pub fn prove<F: PrimeField + FftField>(
         "need d < N (rate < 1)"
     );
     if evals.is_empty() {
-        return Err(ProofError::EvaluationsExceedsDomain);
+        return Err(ProofError::EmptyEvaluations);
+    }
+    if evals.len() != initial_domain_size {
+        return Err(ProofError::BadEvaluationsLength {
+            got: evals.len(),
+            expected: initial_domain_size,
+        });
     }
 
     // TODO: make num of queries scalable, move to options
@@ -114,19 +122,19 @@ pub fn prove<F: PrimeField + FftField>(
     let mut evals_i = evals.to_vec();
     let mut current_max_degree = options.max_degree;
 
-    while current_max_degree > options.max_remainder_degree + 1 {
+    while current_max_degree > options.max_remainder_degree {
         let tree = commit_evals(&evals_i)?;
         let root = tree.root();
         tx.absorb_digest("root", root);
 
         roots.push(*root);
         trees.push(tree);
-        evaluations_layers.push(evals_i.clone());
+        evaluations_layers.push(evals_i);
 
         // get challenge
         let beta_i: F = tx.challenge_field("fri/beta_i");
         // fold
-        evals_i = fold_once(&evals_i, g, beta_i);
+        evals_i = fold_once(&evaluations_layers.last().unwrap(), g, beta_i);
         // advance
         g = g.square();
 
@@ -155,7 +163,8 @@ pub fn prove<F: PrimeField + FftField>(
     // query phase
     let mut queries = Vec::with_capacity(num_queries);
     for _ in 0..num_queries {
-        let idx = tx.challenge_index("fri/query", (initial_domain_size / 2) as u64) as usize;
+        let half = initial_domain_size >> 1;
+        let idx = tx.challenge_index("fri/query", half as u64) as usize;
         let q = produce_query(idx, initial_domain_size, &evaluations_layers, &trees)?;
         queries.push(q);
     }
@@ -179,7 +188,8 @@ fn produce_query<F: PrimeField>(
     let mut domain_size = initial_domain_size;
     for (i, tree) in trees.iter().enumerate() {
         // negative index might be in the first half of the evals
-        let neg_idx = (idx + domain_size / 2) % domain_size;
+        let half = domain_size >> 1;
+        let neg_idx = (idx + half) % domain_size;
         let left_path = tree.open(idx)?;
         let right_path = tree.open(neg_idx)?;
 
@@ -194,8 +204,8 @@ fn produce_query<F: PrimeField>(
             },
         });
 
-        domain_size /= 2;
-        idx %= (domain_size);
+        domain_size >>= 1;
+        idx &= half - 1;
     }
 
     Ok(FriQuery { rounds })
@@ -245,7 +255,7 @@ fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F) -> Vec<F> {
 }
 
 fn trim_trailing_zeroes<F: PrimeField>(v: &mut Vec<F>) {
-    while v.last() == Some(&F::zero()) {
+    while v.len() > 1 && v.last() == Some(&F::zero()) {
         v.pop();
     }
 }
@@ -498,7 +508,7 @@ mod tests {
         let mut tx = Transcript::new(b"transcript", seed);
         let options = FriOptions {
             max_degree: 1533,
-            max_remainder_degree: 3,
+            max_remainder_degree: 1,
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
             .expect("prove should succeed");
