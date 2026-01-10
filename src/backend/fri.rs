@@ -1,3 +1,6 @@
+use std::hash::{BuildHasher, Hasher};
+use std::usize;
+
 use crate::backend::Transcript;
 use crate::backend::{AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, verify_row};
 use ark_ff::{FftField, Field, PrimeField};
@@ -107,8 +110,6 @@ pub fn prove<F: PrimeField + FftField>(
     let mut evaluations_layers = vec![];
     let mut roots = vec![];
     let mut trees = vec![];
-    let mut domain_sizes = vec![];
-    let mut domain_size = initial_domain_size;
     let mut g = initial_domain.group_gen();
     let mut evals_i = evals.to_vec();
     let mut current_max_degree = options.max_degree;
@@ -120,7 +121,6 @@ pub fn prove<F: PrimeField + FftField>(
 
         roots.push(*root);
         trees.push(tree);
-        domain_sizes.push(domain_size);
         evaluations_layers.push(evals_i.clone());
 
         // get challenge
@@ -130,7 +130,6 @@ pub fn prove<F: PrimeField + FftField>(
         // advance
         g = g.square();
 
-        domain_size /= 2;
         // halving upper bound
         current_max_degree = (current_max_degree + 1) / 2;
     }
@@ -138,7 +137,7 @@ pub fn prove<F: PrimeField + FftField>(
     // interpolating final poly
     let final_domain_size = initial_domain_size >> roots.len(); // N / 2^n_folds
     assert_eq!(final_domain_size, evals_i.len());
-    assert!(final_domain_size >= options.max_remainder_degree + 1);
+    assert!(final_domain_size > options.max_remainder_degree);
 
     // TODO: handle error
     let final_domain = Radix2EvaluationDomain::new(final_domain_size).unwrap();
@@ -156,34 +155,9 @@ pub fn prove<F: PrimeField + FftField>(
     // query phase
     let mut queries = Vec::with_capacity(num_queries);
     for _ in 0..num_queries {
-        let mut idx = tx.challenge_index("fri/query", (initial_domain_size / 2) as u64) as usize;
-        let mut rounds = Vec::with_capacity(roots.len());
-
-        for (i, tree) in trees.iter().enumerate() {
-            let domain_size = domain_sizes[i];
-            let half = domain_size / 2;
-            let neg_idx = (idx + half) % domain_size;
-
-            let left = evaluations_layers[i][idx];
-            let right = evaluations_layers[i][neg_idx];
-
-            let left_path = tree.open(idx)?;
-            let right_path = tree.open(neg_idx)?;
-
-            rounds.push(FriRound {
-                left: Opened {
-                    value: left,
-                    path: left_path,
-                },
-                right: Opened {
-                    value: right,
-                    path: right_path,
-                },
-            });
-
-            idx %= half;
-        }
-        queries.push(FriQuery { rounds })
+        let idx = tx.challenge_index("fri/query", (initial_domain_size / 2) as u64) as usize;
+        let q = produce_query(idx, initial_domain_size, &evaluations_layers, &trees)?;
+        queries.push(q);
     }
 
     Ok(FriProof {
@@ -191,6 +165,40 @@ pub fn prove<F: PrimeField + FftField>(
         queries,
         final_poly,
     })
+}
+
+fn produce_query<F: PrimeField>(
+    initial_idx: usize,
+    initial_domain_size: usize,
+    evaluations: &[Vec<F>],
+    trees: &[MerkleTree<Blake3Hasher>],
+) -> Result<FriQuery<F>, MerkleError> {
+    let mut rounds = Vec::with_capacity(trees.len());
+    let mut idx = initial_idx;
+
+    let mut domain_size = initial_domain_size;
+    for (i, tree) in trees.iter().enumerate() {
+        // negative index might be in the first half of the evals
+        let neg_idx = (idx + domain_size / 2) % domain_size;
+        let left_path = tree.open(idx)?;
+        let right_path = tree.open(neg_idx)?;
+
+        rounds.push(FriRound {
+            left: Opened {
+                value: evaluations[i][idx],
+                path: left_path,
+            },
+            right: Opened {
+                value: evaluations[i][neg_idx],
+                path: right_path,
+            },
+        });
+
+        domain_size /= 2;
+        idx %= (domain_size);
+    }
+
+    Ok(FriQuery { rounds })
 }
 
 // convert Vec<F> to slice of bytes, and cpmmit to a tree
