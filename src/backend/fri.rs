@@ -39,6 +39,11 @@ pub struct Opened<F: Field> {
     pub path: AuthPath,
 }
 
+pub struct FriOptions {
+    pub max_degree: usize,
+    pub max_remainder_degree: usize,
+}
+
 #[derive(Error, Debug)]
 pub enum ProofError {
     #[error("polynomial degree is bigger then domain")]
@@ -68,11 +73,6 @@ pub fn prove_from_coefficients<F: PrimeField + FftField>(
     domain.fft_in_place(&mut evals);
 
     prove(&evals, domain, options, tx)
-}
-
-pub struct FriOptions {
-    pub max_degree: usize,
-    pub max_remainder_degree: usize,
 }
 
 pub fn prove<F: PrimeField + FftField>(
