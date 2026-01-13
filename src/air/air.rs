@@ -1,11 +1,13 @@
+use core::error;
+use std::usize;
+
 use crate::backend::{
-    AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, Hasher, MerkleError,
-    MerkleTree, Transcript, fri_prove,
+    AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery, Hasher,
+    MerkleError, MerkleTree, Transcript, fri_prove,
 };
 use ark_ff::{FftField, Field, PrimeField};
-use ark_poly::{EvaluationDomain, GeneralEvaluationDomain, Radix2EvaluationDomain};
+use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
 use ark_serialize::CanonicalSerialize;
-use ark_std::iterable::Iterable;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,9 @@ pub enum ZkvmProveError {
 
     #[error("serialization error: {0}")]
     Serialization(#[from] ark_serialize::SerializationError),
+
+    #[error("fri query has 0 rounds")]
+    BadFriQuery,
 }
 
 impl<F: Field> TraceTable<F> {
@@ -91,11 +96,58 @@ pub type ConstraintFunction<F> = fn(&RowLDEView<F>) -> F;
 
 pub struct TraceQuery<F: PrimeField> {
     pub i: usize,
-    pub cur_row: Vec<F>, // at i
-    pub cur_path: AuthPath,
-    pub prev_row: Vec<F>, // at (i - blowup) mod m
-    pub prev_path: AuthPath,
+    pub current_row: Vec<F>, // at i
+    pub current_row_path: AuthPath,
+    pub previous_row: Vec<F>, // at (i - blowup) mod m
+    pub previous_row_path: AuthPath,
 }
+
+// ---- Transcript labels (single source of truth) ----
+
+// public params
+pub const TRACE_DOMAIN_SIZE_LABEL: &str = "trace_domain_size";
+pub const LDE_DOMAIN_SIZE_LABEL: &str = "lde_domain_size";
+pub const SHIFT_LABEL: &str = "shift";
+pub const FRI_MAX_DEGREE_LABEL: &str = "fri_max_degree";
+pub const FRI_MAX_REMAINDER_DEGREE_LABEL: &str = "fri_max_remainder_degree";
+
+// commitments / roots
+pub const TRACE_ROOT_LABEL: &str = "trace_root";
+
+// challenges
+pub const AIR_ALPHA_PREFIX: &str = "air/alpha/";
+
+// helper to produce "air/alpha/{i}" without repeating the string literal everywhere
+#[inline]
+pub fn air_alpha_label(i: usize) -> String {
+    format!("{AIR_ALPHA_PREFIX}{i}")
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ZkvmPublicParameters<F: PrimeField> {
+    trace_domain_size: usize,
+    lde_domain_size: usize,
+    shift: F,
+    fri_max_degree: usize,
+    fri_max_remainder_degree: usize,
+}
+
+impl<F: PrimeField> ZkvmPublicParameters<F> {
+    fn seed_tx(&self, tx: &mut Transcript) {
+        tx.absorb_bytes(
+            TRACE_DOMAIN_SIZE_LABEL,
+            &self.trace_domain_size.to_le_bytes(),
+        );
+        tx.absorb_bytes(LDE_DOMAIN_SIZE_LABEL, &self.lde_domain_size.to_le_bytes());
+        tx.absorb_field(SHIFT_LABEL, &self.shift);
+        tx.absorb_bytes(FRI_MAX_DEGREE_LABEL, &self.fri_max_degree.to_le_bytes());
+        tx.absorb_bytes(
+            FRI_MAX_REMAINDER_DEGREE_LABEL,
+            &self.fri_max_remainder_degree.to_le_bytes(),
+        );
+    }
+}
+
 pub struct ZkvmProof<F: PrimeField> {
     /// Commitments
     pub trace_root: Digest, // Merkle root for LDE evaluations
@@ -110,14 +162,15 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     trace: &TraceTable<F>,
     trace_domain: Radix2EvaluationDomain<F>,
     lde_domain: Radix2EvaluationDomain<F>,
-    shift: F,
     tx: &mut Transcript,
     constraints: &[ConstraintFunction<F>],
+    public_params: &ZkvmPublicParameters<F>,
 ) -> Result<ZkvmProof<F>, ZkvmProveError> {
     let trace_domain_size = trace_domain.size();
     let lde_domain_size = lde_domain.size();
     let trace_len = trace.n();
     let num_columns = trace.num_cols();
+    let shift = public_params.shift;
     if trace_domain_size != trace_len {
         return Err(ZkvmProveError::TraceLengthMismatch {
             trace_n: trace_len,
@@ -131,9 +184,7 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         });
     }
     let blowup_factor = lde_domain_size / trace_domain_size;
-
-    // TODO: change to absorb pub params
-    tx.absorb_params(trace_domain_size, 1, 1);
+    public_params.seed_tx(tx);
 
     // LDE the trace
     let mut disguised_evaluations: Vec<Vec<F>> = Vec::with_capacity(num_columns);
@@ -158,13 +209,10 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     };
 
     let trace_root = trace_tree.root();
-    tx.absorb_digest("trace_root", &trace_root);
+    tx.absorb_digest(TRACE_ROOT_LABEL, &trace_root);
 
     // generating alphas for future mixing
-    let alphas: Vec<F> = (0..constraints.len())
-        .into_iter()
-        .map(|i| tx.challenge_field::<F>(&format!("air/alpha/{i}")))
-        .collect();
+    let alphas: Vec<F> = generate_mixing_challenges(constraints.len(), tx);
 
     // constructing V evals
     let x0 = trace_domain.element(0);
@@ -207,40 +255,16 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         max_remainder_degree: 1,
     };
 
-    // TODO handle error
     let fri_proof = fri_prove(&v_evals, lde_domain, &fri_options, tx)?;
 
     // open same indexes as in fri
-    let mut trace_queries = Vec::with_capacity(fri_proof.queries.len());
-    for q in &fri_proof.queries {
-        let first_round = q
-            .rounds
-            .first()
-            .expect("Must be at least 1 round in each query");
-
-        let opened_index = first_round.left.path.index;
-        let previous_step_index =
-            (opened_index + lde_domain_size - blowup_factor) % lde_domain_size;
-
-        let cur_row = disguised_evaluations
-            .iter()
-            .map(|col| col[opened_index])
-            .collect();
-        let cur_path = trace_tree.open(opened_index)?;
-        let prev_row = disguised_evaluations
-            .iter()
-            .map(|col| col[previous_step_index])
-            .collect();
-        let prev_path = trace_tree.open(previous_step_index)?;
-
-        trace_queries.push(TraceQuery {
-            i: opened_index,
-            cur_row,
-            cur_path,
-            prev_row,
-            prev_path,
-        });
-    }
+    let trace_queries = generate_trace_queries(
+        lde_domain_size,
+        blowup_factor,
+        &fri_proof.queries,
+        &disguised_evaluations,
+        &trace_tree,
+    )?;
 
     Ok(ZkvmProof {
         trace_root: *trace_root,
@@ -248,6 +272,45 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         fri_proof,
         trace_queries,
     })
+}
+
+fn generate_trace_queries<F: PrimeField>(
+    lde_domain_size: usize,
+    blowup_factor: usize,
+    fri_queries: &[FriQuery<F>],
+    disguised_evaluations: &[Vec<F>],
+    trace_tree: &MerkleTree<Blake3Hasher>,
+) -> Result<Vec<TraceQuery<F>>, ZkvmProveError> {
+    let mut trace_queries = Vec::with_capacity(fri_queries.len());
+    for query in fri_queries {
+        let first_round = query.rounds.first().ok_or(ZkvmProveError::BadFriQuery)?;
+
+        let opened_index = first_round.left.path.index;
+        let previous_step_index =
+            (opened_index + lde_domain_size - blowup_factor) % lde_domain_size;
+
+        // row openings
+        let current_row: Vec<F> = disguised_evaluations
+            .iter()
+            .map(|col| col[opened_index])
+            .collect();
+        let current_row_path = trace_tree.open(opened_index)?;
+        let previous_row: Vec<F> = disguised_evaluations
+            .iter()
+            .map(|col| col[previous_step_index])
+            .collect();
+        let previous_row_path = trace_tree.open(previous_step_index)?;
+
+        trace_queries.push(TraceQuery {
+            i: opened_index,
+            current_row,
+            current_row_path,
+            previous_row,
+            previous_row_path,
+        });
+    }
+
+    Ok(trace_queries)
 }
 
 fn push_field_bytes<F: CanonicalSerialize>(x: &F, out: &mut Vec<u8>) {
@@ -282,4 +345,14 @@ fn lde_extend_column<F: FftField>(
     coeffs.resize(m, F::zero());
     domain_m.fft_in_place(&mut coeffs);
     coeffs
+}
+
+fn generate_mixing_challenges<F: PrimeField>(
+    constraints_len: usize,
+    tx: &mut Transcript,
+) -> Vec<F> {
+    (0..constraints_len)
+        .into_iter()
+        .map(|i| tx.challenge_field::<F>(&air_alpha_label(i)))
+        .collect()
 }
