@@ -1,6 +1,3 @@
-use core::error;
-use std::usize;
-
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery, Hasher,
     MerkleError, MerkleTree, Transcript, fri_prove,
@@ -355,4 +352,40 @@ fn generate_mixing_challenges<F: PrimeField>(
         .into_iter()
         .map(|i| tx.challenge_field::<F>(&air_alpha_label(i)))
         .collect()
+}
+
+#[derive(Debug, Error)]
+pub enum ZkvmVerifyError {
+    #[error("verification failed")]
+    VerificationFailed,
+
+    #[error("bad fri proof")]
+    BadFriProof,
+}
+
+pub fn verify<F: PrimeField>(
+    proof: &ZkvmProof<F>,
+    tx: &mut Transcript,
+    constraints: &[ConstraintFunction<F>],
+    public_params: &ZkvmPublicParameters<F>,
+) -> Result<(), ZkvmVerifyError> {
+    public_params.seed_tx(tx);
+    tx.absorb_digest(TRACE_ROOT_LABEL, &proof.trace_root);
+    let alphas = generate_mixing_challenges::<F>(constraints.len(), tx);
+    let query_indexes = collect_fri_query_indexes(&proof.fri_proof);
+    Ok(())
+}
+
+fn collect_fri_query_indexes<F: PrimeField>(
+    fri_proof: &FriProof<F>,
+) -> Result<Vec<usize>, ZkvmVerifyError> {
+    let mut query_indexes = Vec::with_capacity(fri_proof.queries.len());
+
+    for query in fri_proof.queries.iter() {
+        let first_round = query.rounds.first().ok_or(ZkvmVerifyError::BadFriProof)?;
+        let index = first_round.left.path.index;
+        query_indexes.push(index);
+    }
+
+    Ok(query_indexes)
 }
