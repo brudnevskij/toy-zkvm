@@ -59,7 +59,7 @@ pub enum ProofError {
 
 pub fn prove_from_coefficients<F: PrimeField + FftField>(
     coeffs: &[F],
-    domain: Radix2EvaluationDomain<F>,
+    domain: &Radix2EvaluationDomain<F>,
     options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
@@ -77,7 +77,7 @@ pub fn prove_from_coefficients<F: PrimeField + FftField>(
 
 pub fn prove<F: PrimeField + FftField>(
     evals: &[F],
-    initial_domain: Radix2EvaluationDomain<F>,
+    initial_domain: &Radix2EvaluationDomain<F>,
     options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
@@ -282,7 +282,7 @@ pub enum VerificationError {
 
 pub fn verify<F: PrimeField + FftField>(
     proof: &FriProof<F>,
-    domain: Radix2EvaluationDomain<F>,
+    domain: &Radix2EvaluationDomain<F>,
     options: &FriOptions,
     tx: &mut Transcript,
 ) -> Result<(), VerificationError> {
@@ -491,7 +491,7 @@ mod tests {
             max_remainder_degree: 3,
         };
 
-        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+        let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("prove should succeed");
 
         (proof, domain, options)
@@ -510,12 +510,12 @@ mod tests {
             max_degree: 1533,
             max_remainder_degree: 1,
         };
-        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+        let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("prove should succeed");
 
         // verification
         let mut tx = Transcript::new(b"transcript", seed);
-        verify::<Fr>(&proof, domain, &options, &mut tx).expect("verify should succeed");
+        verify::<Fr>(&proof, &domain, &options, &mut tx).expect("verify should succeed");
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
 
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
-        let res = verify(&proof, domain, &options, &mut tx);
+        let res = verify(&proof, &domain, &options, &mut tx);
         assert!(res.is_err());
     }
 
@@ -537,7 +537,7 @@ mod tests {
 
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
-        let res = verify(&proof, domain, &options, &mut tx);
+        let res = verify(&proof, &domain, &options, &mut tx);
         assert!(matches!(res, Err(VerificationError::VerificationFailed)));
     }
 
@@ -548,7 +548,7 @@ mod tests {
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
 
-        let res = verify(&proof, domain, &options, &mut tx);
+        let res = verify(&proof, &domain, &options, &mut tx);
         assert!(matches!(
             res,
             Err(VerificationError::MerkleAuthError { .. })
@@ -568,11 +568,11 @@ mod tests {
             max_degree: 1000,
             max_remainder_degree: 100,
         };
-        let proof = prove_from_coefficients::<Fr>(&coeffs, domain, &options, &mut tx)
+        let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("should succeed");
 
         let mut tx = Transcript::new(b"transcript", seed);
-        let res = verify(&proof, domain, &options, &mut tx);
+        let res = verify(&proof, &domain, &options, &mut tx);
         assert!(matches!(
             res,
             Err(VerificationError::FinalPolynomialExceedMaxRemainderDegree)
