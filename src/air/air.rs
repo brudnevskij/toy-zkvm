@@ -1,6 +1,10 @@
+use core::error;
+use std::{u64, usize};
+
 use crate::backend::{
-    AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery, Hasher,
-    MerkleError, MerkleTree, Transcript, fri_prove,
+    AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery,
+    FriVerificationError, Hasher, MerkleError, MerkleTree, Transcript, fri_prove, fri_verify,
+    verify_leaf, verify_row,
 };
 use ark_ff::{FftField, Field, PrimeField};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
@@ -64,32 +68,57 @@ impl<F: Field> TraceTable<F> {
     pub fn num_cols(&self) -> usize {
         self.columns.len()
     }
-    pub fn col(&self, c: usize) -> &[F] {
-        &self.columns[c]
-    }
+}
 
-    pub fn get(&self, c: usize, t: usize) -> F {
-        self.columns[c][t]
-    }
+pub trait RowAccess<F: PrimeField> {
+    fn current_step_column_value(&self, column: usize) -> F;
+    fn previous_step_column_value(&self, column: usize) -> F;
 
-    pub fn get_next_cyclic(&self, c: usize, t: usize) -> F {
-        self.columns[c][(t + 1) % self.n]
-    }
+    fn x(&self) -> F;
+    fn x0(&self) -> F;
+    fn x_last(&self) -> F;
+    fn z_h_inverse(&self) -> F;
 }
 
 /// API for constraint functions to access the table
 #[derive(Clone, Debug)]
-pub struct RowLDEView<'a, F> {
+pub struct ProverRowLdeView<'a, F> {
     pub i: usize,
-    pub x: F,           // x in the shifted LDE cosset
-    pub x0: F,          // first x in the n domain
-    pub x_last: F,      // last x in the n domain
-    pub cur: &'a [F],   // current row
-    pub prev: &'a [F],  // previous row
-    pub z_h_inverse: F, // (x^n - 1)^-1
+    pub previous_i: usize,
+    pub x: F,                  // x in the shifted LDE cosset
+    pub x0: F,                 // first x in the n domain
+    pub x_last: F,             // last x in the n domain
+    pub z_h_inverse: F,        // (x^n - 1)^-1
+    pub columns: &'a [Vec<F>], // lde trace
 }
 
-pub type ConstraintFunction<F> = fn(&RowLDEView<F>) -> F;
+impl<'a, F: PrimeField> RowAccess<F> for ProverRowLdeView<'a, F> {
+    fn current_step_column_value(&self, column: usize) -> F {
+        self.columns[column][self.i]
+    }
+
+    fn previous_step_column_value(&self, column: usize) -> F {
+        self.columns[column][self.previous_i]
+    }
+
+    fn x(&self) -> F {
+        self.x
+    }
+
+    fn x0(&self) -> F {
+        self.x0
+    }
+
+    fn x_last(&self) -> F {
+        self.x_last
+    }
+
+    fn z_h_inverse(&self) -> F {
+        self.z_h_inverse
+    }
+}
+
+pub type ConstraintFunction<F> = fn(&dyn RowAccess<F>) -> F;
 
 pub struct TraceQuery<F: PrimeField> {
     pub i: usize,
@@ -110,6 +139,7 @@ pub const FRI_MAX_REMAINDER_DEGREE_LABEL: &str = "fri_max_remainder_degree";
 
 // commitments / roots
 pub const TRACE_ROOT_LABEL: &str = "trace_root";
+pub const TRACE_ROW_LABEL: &[u8] = b"trace_row";
 
 // challenges
 pub const AIR_ALPHA_PREFIX: &str = "air/alpha/";
@@ -122,20 +152,21 @@ pub fn air_alpha_label(i: usize) -> String {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ZkvmPublicParameters<F: PrimeField> {
-    trace_domain_size: usize,
-    lde_domain_size: usize,
+    trace_domain: Radix2EvaluationDomain<F>,
+    lde_domain: Radix2EvaluationDomain<F>,
     shift: F,
     fri_max_degree: usize,
     fri_max_remainder_degree: usize,
 }
 
+// TODO: consider adding constructor with domain assertions
 impl<F: PrimeField> ZkvmPublicParameters<F> {
     fn seed_tx(&self, tx: &mut Transcript) {
         tx.absorb_bytes(
             TRACE_DOMAIN_SIZE_LABEL,
-            &self.trace_domain_size.to_le_bytes(),
+            &self.trace_domain.size().to_le_bytes(),
         );
-        tx.absorb_bytes(LDE_DOMAIN_SIZE_LABEL, &self.lde_domain_size.to_le_bytes());
+        tx.absorb_bytes(LDE_DOMAIN_SIZE_LABEL, &self.lde_domain.size().to_le_bytes());
         tx.absorb_field(SHIFT_LABEL, &self.shift);
         tx.absorb_bytes(FRI_MAX_DEGREE_LABEL, &self.fri_max_degree.to_le_bytes());
         tx.absorb_bytes(
@@ -157,23 +188,31 @@ pub struct ZkvmProof<F: PrimeField> {
 
 pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     trace: &TraceTable<F>,
-    trace_domain: Radix2EvaluationDomain<F>,
-    lde_domain: Radix2EvaluationDomain<F>,
     tx: &mut Transcript,
     constraints: &[ConstraintFunction<F>],
     public_params: &ZkvmPublicParameters<F>,
 ) -> Result<ZkvmProof<F>, ZkvmProveError> {
+    let ZkvmPublicParameters {
+        trace_domain,
+        lde_domain,
+        shift: _,
+        fri_max_degree,
+        fri_max_remainder_degree,
+    } = public_params;
+
+    let shift = public_params.shift;
     let trace_domain_size = trace_domain.size();
     let lde_domain_size = lde_domain.size();
     let trace_len = trace.n();
     let num_columns = trace.num_cols();
-    let shift = public_params.shift;
+
     if trace_domain_size != trace_len {
         return Err(ZkvmProveError::TraceLengthMismatch {
             trace_n: trace_len,
             domain_n: trace_domain_size,
         });
     }
+
     if lde_domain_size % trace_domain_size != 0 {
         return Err(ZkvmProveError::BadLdeDomains {
             n: trace_domain_size,
@@ -183,76 +222,35 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     let blowup_factor = lde_domain_size / trace_domain_size;
     public_params.seed_tx(tx);
 
-    // LDE the trace
+    // build shifted LDE trace and commit it
     let mut disguised_evaluations: Vec<Vec<F>> = Vec::with_capacity(num_columns);
 
     for column in trace.columns.iter() {
         disguised_evaluations.push(lde_extend_column(column, &trace_domain, &lde_domain, shift));
     }
 
-    let trace_tree = {
-        let mut leaf_digests = Vec::with_capacity(lde_domain_size);
-        for i in 0..lde_domain_size {
-            let mut buf = Vec::with_capacity(trace.columns.len() * 32);
-            // mmarking the buffer
-            buf.extend_from_slice(b"trace_row");
-            buf.extend_from_slice(&(i as u32).to_le_bytes());
-            for c in 0..trace.columns.len() {
-                push_field_bytes(&disguised_evaluations[c][i], &mut buf);
-            }
-            leaf_digests.push(Blake3Hasher::hash_leaf(&buf));
-        }
-        MerkleTree::<Blake3Hasher>::from_leaf_digests(&leaf_digests)?
-    };
-
+    let trace_tree = generate_trace_tree(lde_domain_size, &disguised_evaluations)?;
     let trace_root = trace_tree.root();
     tx.absorb_digest(TRACE_ROOT_LABEL, &trace_root);
 
     // generating alphas for future mixing
     let alphas: Vec<F> = generate_mixing_challenges(constraints.len(), tx);
 
-    // constructing V evals
-    let x0 = trace_domain.element(0);
-    let x_last = trace_domain.element(trace_domain_size - 1);
-    let mut v_evals = vec![F::zero(); lde_domain_size];
-    for i in 0..lde_domain_size {
-        let previous_index = (i + lde_domain_size - blowup_factor) % lde_domain_size;
-
-        let cur_row: Vec<F> = disguised_evaluations.iter().map(|clmn| clmn[i]).collect();
-        let prev_row: Vec<F> = disguised_evaluations
-            .iter()
-            .map(|clmn| clmn[previous_index])
-            .collect();
-
-        let x = shift * lde_domain.element(i);
-        let z_h = x.pow([trace_domain_size as u64]) - F::one();
-        let z_h_inverse = z_h
-            .inverse()
-            .ok_or(ZkvmProveError::VanishingPolyNotInvertible { i })?;
-
-        let row = RowLDEView {
-            i,
-            x,
-            x0,
-            x_last,
-            cur: &cur_row,
-            prev: &prev_row,
-            z_h_inverse,
-        };
-
-        let mut acc = F::zero();
-        for (alpha, c) in alphas.iter().zip(constraints.iter()) {
-            acc += *alpha * c(&row);
-        }
-        v_evals[i] = acc;
-    }
+    let verification_evaluations = construct_verification_evaluations(
+        shift,
+        trace_domain,
+        lde_domain,
+        &alphas,
+        &disguised_evaluations,
+        constraints,
+    )?;
 
     let fri_options = FriOptions {
-        max_degree: 2 * trace_domain_size,
-        max_remainder_degree: 1,
+        max_degree: *fri_max_degree,
+        max_remainder_degree: *fri_max_remainder_degree,
     };
 
-    let fri_proof = fri_prove(&v_evals, lde_domain, &fri_options, tx)?;
+    let fri_proof = fri_prove(&verification_evaluations, lde_domain, &fri_options, tx)?;
 
     // open same indexes as in fri
     let trace_queries = generate_trace_queries(
@@ -269,6 +267,88 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         fri_proof,
         trace_queries,
     })
+}
+
+fn generate_trace_tree<F: PrimeField>(
+    lde_domain_size: usize,
+    disguised_evaluations: &[Vec<F>],
+) -> Result<MerkleTree<Blake3Hasher>, MerkleError> {
+    let mut leaf_digests = Vec::with_capacity(lde_domain_size);
+
+    for i in 0..lde_domain_size {
+        leaf_digests.push(hash_trace_row_from_columns(i, disguised_evaluations));
+    }
+
+    MerkleTree::<Blake3Hasher>::from_leaf_digests(&leaf_digests)
+}
+
+fn hash_trace_row_from_columns<F: CanonicalSerialize>(
+    step_index: usize,
+    columns: &[Vec<F>],
+) -> Digest {
+    hash_trace_row_iter(step_index, columns.iter().map(|column| &column[step_index]))
+}
+
+fn hash_trace_row_iter<'a, F, I>(step_index: usize, values: I) -> Digest
+where
+    F: CanonicalSerialize + 'a,
+    I: IntoIterator<Item = &'a F>,
+{
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(TRACE_ROW_LABEL);
+    buffer.extend_from_slice(&step_index.to_le_bytes());
+
+    for x in values {
+        x.serialize_compressed(&mut buffer).unwrap();
+    }
+
+    Blake3Hasher::hash_leaf(&buffer)
+}
+
+fn construct_verification_evaluations<F: PrimeField>(
+    shift: F,
+    trace_domain: &Radix2EvaluationDomain<F>,
+    lde_domain: &Radix2EvaluationDomain<F>,
+    alphas: &[F],
+    lde_evaluations: &[Vec<F>],
+    constraints: &[ConstraintFunction<F>],
+) -> Result<Vec<F>, ZkvmProveError> {
+    let trace_domain_size = trace_domain.size();
+    let lde_domain_size = lde_domain.size();
+    let blowup_factor = lde_domain_size / trace_domain_size;
+    let mut verification_evaluations = Vec::with_capacity(lde_domain_size);
+    let x0 = trace_domain.element(0);
+    let x_last = trace_domain.element(trace_domain_size - 1);
+
+    for i in 0..lde_domain_size {
+        let previous_step_index = (i + lde_domain_size - blowup_factor) % lde_domain_size;
+        let x = shift * lde_domain.element(i);
+        let z_h = x.pow(&[trace_domain_size as u64]) - F::one();
+        let z_h_inverse = z_h
+            .inverse()
+            .ok_or(ZkvmProveError::VanishingPolyNotInvertible { i })?;
+
+        let row_view = ProverRowLdeView {
+            i,
+            previous_i: previous_step_index,
+            x,
+            x0,
+            x_last,
+            columns: lde_evaluations,
+            z_h_inverse,
+        };
+
+        let mut acc = F::zero();
+
+        // TODO: consider changing zip, as it migh drop certaints constraints if alphas.len <
+        // constraints.len()
+        for (&alpha, constraint) in alphas.iter().zip(constraints.iter()) {
+            acc += alpha * constraint(&row_view);
+        }
+        verification_evaluations.push(acc);
+    }
+
+    Ok(verification_evaluations)
 }
 
 fn generate_trace_queries<F: PrimeField>(
@@ -310,10 +390,6 @@ fn generate_trace_queries<F: PrimeField>(
     Ok(trace_queries)
 }
 
-fn push_field_bytes<F: CanonicalSerialize>(x: &F, out: &mut Vec<u8>) {
-    x.serialize_compressed(out).unwrap(); // compressed is fine for a field element
-}
-
 /// Generate LDE of a column, by iFFting evaluations on N to coefficients, scaling them with a shift factor
 /// and finally FFTing them back on the extended domain
 fn lde_extend_column<F: FftField>(
@@ -349,7 +425,6 @@ fn generate_mixing_challenges<F: PrimeField>(
     tx: &mut Transcript,
 ) -> Vec<F> {
     (0..constraints_len)
-        .into_iter()
         .map(|i| tx.challenge_field::<F>(&air_alpha_label(i)))
         .collect()
 }
@@ -361,6 +436,57 @@ pub enum ZkvmVerifyError {
 
     #[error("bad fri proof")]
     BadFriProof,
+
+    #[error(
+        "merkle verification failed: current row verificattion: {current_row}, previous row verification {previous_row}"
+    )]
+    MerkleVerificationFailed {
+        current_row: bool,
+        previous_row: bool,
+    },
+
+    #[error("fri verification error: {0}")]
+    FriVerificationError(#[from] FriVerificationError),
+
+    #[error("vanishing polynomial Z_H(x)=x^n-1 is zero at i={i} (cannot invert)")]
+    VanishingPolyNotInvertible { i: usize },
+}
+
+struct VerifierRowLdeView<'a, F: PrimeField> {
+    pub i: usize,
+    pub previous_i: usize,
+    pub x: F,           // x in the shifted LDE cosset
+    pub x0: F,          // first x in the n domain
+    pub x_last: F,      // last x in the n domain
+    pub z_h_inverse: F, // (x^n - 1)^-1
+    pub current_row: &'a [F],
+    pub previous_row: &'a [F],
+}
+
+impl<'a, F: PrimeField> RowAccess<F> for VerifierRowLdeView<'a, F> {
+    fn current_step_column_value(&self, column: usize) -> F {
+        self.current_row[column]
+    }
+
+    fn previous_step_column_value(&self, column: usize) -> F {
+        self.previous_row[column]
+    }
+
+    fn x(&self) -> F {
+        self.x
+    }
+
+    fn x0(&self) -> F {
+        self.x0
+    }
+
+    fn x_last(&self) -> F {
+        self.x_last
+    }
+
+    fn z_h_inverse(&self) -> F {
+        self.z_h_inverse
+    }
 }
 
 pub fn verify<F: PrimeField>(
@@ -372,20 +498,101 @@ pub fn verify<F: PrimeField>(
     public_params.seed_tx(tx);
     tx.absorb_digest(TRACE_ROOT_LABEL, &proof.trace_root);
     let alphas = generate_mixing_challenges::<F>(constraints.len(), tx);
-    let query_indexes = collect_fri_query_indexes(&proof.fri_proof);
-    Ok(())
-}
 
-fn collect_fri_query_indexes<F: PrimeField>(
-    fri_proof: &FriProof<F>,
-) -> Result<Vec<usize>, ZkvmVerifyError> {
-    let mut query_indexes = Vec::with_capacity(fri_proof.queries.len());
-
-    for query in fri_proof.queries.iter() {
-        let first_round = query.rounds.first().ok_or(ZkvmVerifyError::BadFriProof)?;
-        let index = first_round.left.path.index;
-        query_indexes.push(index);
+    // asserting length of fri and zkvm queries, as well as length of rounds > 0
+    let ok = proof.trace_queries.len() == proof.fri_proof.queries.len();
+    if !ok {
+        return Err(ZkvmVerifyError::BadFriProof);
     }
 
-    Ok(query_indexes)
+    let trace_domain_size = public_params.trace_domain.size();
+    let x0 = public_params.trace_domain.element(0);
+    let x_last = public_params.trace_domain.element(trace_domain_size - 1);
+    for (trace_query, fri_query) in proof
+        .trace_queries
+        .iter()
+        .zip(proof.fri_proof.queries.iter())
+    {
+        let TraceQuery {
+            i: _,
+            current_row,
+            current_row_path,
+            previous_row,
+            previous_row_path,
+        } = trace_query;
+        // TODO: consider asserting i == current_row_path.index and
+        // previous_i == previous_row_path.index
+
+        let i = trace_query.i;
+        let first_round = fri_query
+            .rounds
+            .first()
+            .ok_or(ZkvmVerifyError::BadFriProof)?;
+        if i != first_round.left.path.index {
+            return Err(ZkvmVerifyError::BadFriProof);
+        }
+
+        // merkle verification
+        let lde_domain_size = public_params.lde_domain.size();
+        let blowup_factor = lde_domain_size / trace_domain_size;
+        let previous_i = (i + lde_domain_size - blowup_factor) % lde_domain_size;
+
+        let current_row_digest = hash_trace_row_iter(i, current_row.iter());
+        let current_row_merkle_verificattion =
+            verify_leaf::<Blake3Hasher>(&proof.trace_root, &current_row_digest, current_row_path);
+        let previous_row_digest = hash_trace_row_iter(previous_i, previous_row.iter());
+        let previous_row_merkle_verification = verify_leaf::<Blake3Hasher>(
+            &proof.trace_root,
+            &previous_row_digest,
+            &previous_row_path,
+        );
+
+        if !(current_row_merkle_verificattion && previous_row_merkle_verification) {
+            return Err(ZkvmVerifyError::MerkleVerificationFailed {
+                current_row: current_row_merkle_verificattion,
+                previous_row: previous_row_merkle_verification,
+            });
+        }
+
+        // compute verification polynomial evaluations for a given i
+        let x = public_params.shift * public_params.lde_domain.element(i);
+        let z_h = x.pow(&[trace_domain_size as u64]) - F::one();
+        let z_h_inverse = z_h
+            .inverse()
+            .ok_or(ZkvmVerifyError::VanishingPolyNotInvertible { i })?;
+
+        let row = VerifierRowLdeView {
+            i,
+            previous_i,
+            x,
+            x0,
+            x_last,
+            z_h_inverse,
+            current_row,
+            previous_row,
+        };
+
+        let mut v_evaluation_at_i = F::zero();
+
+        for (&alpha, constraint) in alphas.iter().zip(constraints.iter()) {
+            v_evaluation_at_i += alpha * constraint(&row);
+        }
+
+        if first_round.left.value != v_evaluation_at_i {
+            return Err(ZkvmVerifyError::VerificationFailed);
+        }
+    }
+
+    let fri_options = FriOptions {
+        max_degree: public_params.fri_max_degree,
+        max_remainder_degree: public_params.fri_max_remainder_degree,
+    };
+
+    fri_verify(
+        &proof.fri_proof,
+        &public_params.lde_domain,
+        &fri_options,
+        tx,
+    )?;
+    Ok(())
 }
