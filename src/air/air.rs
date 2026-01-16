@@ -1,10 +1,7 @@
-use core::error;
-use std::{u64, usize};
-
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery,
     FriVerificationError, Hasher, MerkleError, MerkleTree, Transcript, fri_prove, fri_verify,
-    verify_leaf, verify_row,
+    verify_leaf,
 };
 use ark_ff::{FftField, Field, PrimeField};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
