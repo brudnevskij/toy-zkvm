@@ -149,11 +149,11 @@ pub fn air_alpha_label(i: usize) -> String {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ZkvmPublicParameters<F: PrimeField> {
-    trace_domain: Radix2EvaluationDomain<F>,
-    lde_domain: Radix2EvaluationDomain<F>,
-    shift: F,
-    fri_max_degree: usize,
-    fri_max_remainder_degree: usize,
+    pub trace_domain: Radix2EvaluationDomain<F>,
+    pub lde_domain: Radix2EvaluationDomain<F>,
+    pub shift: F,
+    pub fri_max_degree: usize,
+    pub fri_max_remainder_degree: usize,
 }
 
 // TODO: consider adding constructor with domain assertions
