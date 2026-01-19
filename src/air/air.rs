@@ -1,3 +1,5 @@
+use std::option;
+
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery,
     FriVerificationError, Hasher, MerkleError, MerkleTree, Transcript, fri_prove, fri_verify,
@@ -13,30 +15,6 @@ pub struct TraceTable<F: Field> {
     n: usize,
     columns: Vec<Vec<F>>,
     names: Vec<&'static str>,
-}
-
-#[derive(Debug, Error)]
-pub enum ZkvmProveError {
-    #[error("trace length mismatch: trace.n={trace_n}, domain_n.size={domain_n}")]
-    TraceLengthMismatch { trace_n: usize, domain_n: usize },
-
-    #[error("bad LDE domain sizes: m must be a multiple of n (n={n}, m={m})")]
-    BadLdeDomains { n: usize, m: usize },
-
-    #[error("vanishing polynomial Z_H(x)=x^n-1 is zero at i={i} (cannot invert)")]
-    VanishingPolyNotInvertible { i: usize },
-
-    #[error("merkle error: {0}")]
-    Merkle(#[from] MerkleError),
-
-    #[error("fri error: {0}")]
-    Fri(#[from] FriProofError),
-
-    #[error("serialization error: {0}")]
-    Serialization(#[from] ark_serialize::SerializationError),
-
-    #[error("fri query has 0 rounds")]
-    BadFriQuery,
 }
 
 impl<F: Field> TraceTable<F> {
@@ -173,6 +151,30 @@ impl<F: PrimeField> ZkvmPublicParameters<F> {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum ZkvmProveError {
+    #[error("trace length mismatch: trace.n={trace_n}, domain_n.size={domain_n}")]
+    TraceLengthMismatch { trace_n: usize, domain_n: usize },
+
+    #[error("bad LDE domain sizes: m must be a multiple of n (n={n}, m={m})")]
+    BadLdeDomains { n: usize, m: usize },
+
+    #[error("vanishing polynomial Z_H(x)=x^n-1 is zero at i={i} (cannot invert)")]
+    VanishingPolyNotInvertible { i: usize },
+
+    #[error("merkle error: {0}")]
+    Merkle(#[from] MerkleError),
+
+    #[error("fri error: {0}")]
+    Fri(#[from] FriProofError),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] ark_serialize::SerializationError),
+
+    #[error("fri query has 0 rounds")]
+    BadFriQuery,
+}
+
 pub struct ZkvmProof<F: PrimeField> {
     /// Commitments
     pub trace_root: Digest, // Merkle root for LDE evaluations
@@ -245,6 +247,7 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     let fri_options = FriOptions {
         max_degree: *fri_max_degree,
         max_remainder_degree: *fri_max_remainder_degree,
+        shift,
     };
 
     let fri_proof = fri_prove(&verification_evaluations, lde_domain, &fri_options, tx)?;
@@ -583,6 +586,7 @@ pub fn verify<F: PrimeField>(
     let fri_options = FriOptions {
         max_degree: public_params.fri_max_degree,
         max_remainder_degree: public_params.fri_max_remainder_degree,
+        shift: public_params.shift,
     };
 
     fri_verify(

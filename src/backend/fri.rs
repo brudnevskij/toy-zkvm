@@ -1,12 +1,9 @@
-use std::hash::{BuildHasher, Hasher};
-use std::usize;
-
-use crate::backend::Transcript;
-use crate::backend::{AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, verify_row};
+use crate::backend::{
+    AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, Transcript, verify_row,
+};
 use ark_ff::{FftField, Field, PrimeField};
-use ark_poly::{EvaluationDomain, GeneralEvaluationDomain, Radix2EvaluationDomain};
+use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
 use ark_serialize::CanonicalSerialize;
-use rand::seq::IndexedRandom;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -39,9 +36,10 @@ pub struct Opened<F: Field> {
     pub path: AuthPath,
 }
 
-pub struct FriOptions {
+pub struct FriOptions<F: PrimeField> {
     pub max_degree: usize,
     pub max_remainder_degree: usize,
+    pub shift: F,
 }
 
 #[derive(Error, Debug)]
@@ -60,7 +58,7 @@ pub enum ProofError {
 pub fn prove_from_coefficients<F: PrimeField + FftField>(
     coeffs: &[F],
     domain: &Radix2EvaluationDomain<F>,
-    options: &FriOptions,
+    options: &FriOptions<F>,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
     let n0 = domain.size();
@@ -78,7 +76,7 @@ pub fn prove_from_coefficients<F: PrimeField + FftField>(
 pub fn prove<F: PrimeField + FftField>(
     evals: &[F],
     initial_domain: &Radix2EvaluationDomain<F>,
-    options: &FriOptions,
+    options: &FriOptions<F>,
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
     let initial_domain_size = initial_domain.size();
@@ -119,6 +117,7 @@ pub fn prove<F: PrimeField + FftField>(
     let mut roots = vec![];
     let mut trees = vec![];
     let mut g = initial_domain.group_gen();
+    let mut shift = options.shift;
     let mut evals_i = evals.to_vec();
     let mut current_max_degree = options.max_degree;
 
@@ -134,9 +133,11 @@ pub fn prove<F: PrimeField + FftField>(
         // get challenge
         let beta_i: F = tx.challenge_field("fri/beta_i");
         // fold
-        evals_i = fold_once(&evaluations_layers.last().unwrap(), g, beta_i);
+        let last = evaluations_layers.last().unwrap();
+        evals_i = fold_once(last, g, beta_i, options.shift);
         // advance
         g = g.square();
+        shift = shift.square();
 
         // halving upper bound
         current_max_degree = (current_max_degree + 1) / 2;
@@ -154,7 +155,10 @@ pub fn prove<F: PrimeField + FftField>(
     trim_trailing_zeroes(&mut final_poly);
     assert!(
         final_poly.len() <= options.max_remainder_degree,
-        "final poly degree must be less than max remainder degree"
+        "final poly degree: {0} must be less than max remainder degree: {1} \n final poly: {2:?}",
+        final_poly.len(),
+        options.max_remainder_degree,
+        final_poly
     );
 
     let final_tree = commit_evals(&final_poly)?;
@@ -230,18 +234,24 @@ pub fn commit_evals<F: CanonicalSerialize>(
     Ok(tree)
 }
 
-fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F) -> Vec<F> {
+fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F, shift: F) -> Vec<F> {
     let n = evals.len();
     let half = n / 2;
 
     let inv2 = F::from(2u64).inverse().expect("inverse");
     let ginv = g.inverse().expect("inverse");
 
-    let mut invx = F::one();
+    // 1/x where x = shift g^i => invx = shift^{-1} * g^{-1}
+    // starting with shift because x0 = 1
+    let mut invx = shift.inverse().expect("shift inverse");
     let mut out = Vec::with_capacity(half);
+
     for i in 0..half {
         let j = i + half;
+
+        // f(x)
         let fx = evals[i];
+        // f(-x)
         let fnegx = evals[j];
 
         let f_even = (fx + fnegx) * inv2;
@@ -283,7 +293,7 @@ pub enum VerificationError {
 pub fn verify<F: PrimeField + FftField>(
     proof: &FriProof<F>,
     domain: &Radix2EvaluationDomain<F>,
-    options: &FriOptions,
+    options: &FriOptions<F>,
     tx: &mut Transcript,
 ) -> Result<(), VerificationError> {
     let n0 = domain.size();
@@ -395,7 +405,7 @@ pub fn verify<F: PrimeField + FftField>(
             }
 
             // fold
-            let x = g.pow([idx as u64]);
+            let x = options.shift * g.pow([idx as u64]);
             let y = fold_evaluation_pair(
                 round.left.value,
                 round.right.value,
@@ -431,11 +441,14 @@ fn fold_evaluation_pair<F: Field>(left_value: F, right_value: F, x_inv: F, beta:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::Transcript;
+    use crate::{
+        backend::Transcript,
+        test_utils::{pick_coset_shift, pick_domain},
+    };
     use ark_bn254::Fr;
-    use ark_ff::{Field, One, PrimeField, UniformRand, Zero};
+    use ark_ff::{One, UniformRand, Zero};
+    use ark_poly::DenseUVPolynomial;
     use ark_poly::univariate::DensePolynomial;
-    use ark_poly::{DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain};
     use ark_std::rand::{SeedableRng, rngs::StdRng};
 
     // build f(x) from random coeffs of given length
@@ -471,12 +484,7 @@ mod tests {
             .fold(Fr::zero(), |acc, &c| acc * x + c)
     }
 
-    // pick a power-of-two N ≥ deg+1
-    fn pick_domain<F: PrimeField>(n: usize) -> Radix2EvaluationDomain<F> {
-        Radix2EvaluationDomain::<F>::new(n).expect("expect radix 2 domain")
-    }
-
-    fn make_honest_proof() -> (FriProof<Fr>, Radix2EvaluationDomain<Fr>, FriOptions) {
+    fn make_honest_proof() -> (FriProof<Fr>, Radix2EvaluationDomain<Fr>, FriOptions<Fr>) {
         // N = 2^15
         let n = 32768usize;
 
@@ -489,6 +497,7 @@ mod tests {
         let options = FriOptions {
             max_degree: 1533,
             max_remainder_degree: 3,
+            shift: Fr::one(),
         };
 
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
@@ -509,6 +518,30 @@ mod tests {
         let options = FriOptions {
             max_degree: 1533,
             max_remainder_degree: 1,
+            shift: Fr::one(),
+        };
+        let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
+            .expect("prove should succeed");
+
+        // verification
+        let mut tx = Transcript::new(b"transcript", seed);
+        verify::<Fr>(&proof, &domain, &options, &mut tx).expect("verify should succeed");
+    }
+
+    #[test]
+    fn honest_prover_shifted_cosset_verifier_ok() {
+        // N = 2^15
+        let n = 32768usize;
+        let domain = pick_domain::<Fr>(n);
+        let coeffs = random_poly(1533, 1337);
+        let shift = pick_coset_shift(n);
+
+        let seed = b"fri-seed-1";
+        let mut tx = Transcript::new(b"transcript", seed);
+        let options = FriOptions {
+            max_degree: 1533,
+            max_remainder_degree: 1,
+            shift,
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("prove should succeed");
@@ -567,6 +600,7 @@ mod tests {
         let options = FriOptions {
             max_degree: 1000,
             max_remainder_degree: 100,
+            shift: Fr::one(),
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("should succeed");
