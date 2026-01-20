@@ -1,3 +1,5 @@
+use std::usize;
+
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, Transcript, verify_row,
 };
@@ -274,8 +276,16 @@ fn trim_trailing_zeroes<F: PrimeField>(v: &mut Vec<F>) {
 pub enum VerificationError {
     #[error("bad init params")]
     BadProof,
-    #[error("final polynomial exceeds max remainder degree")]
-    FinalPolynomialExceedMaxRemainderDegree,
+    #[error("final polynomial degree: {got} exceeds max remainder degree: {expected}")]
+    FinalPolynomialDegreeExceedMaxRemainderDegree { got: usize, expected: usize },
+    #[error(
+        "final polynomial degree: {got} exceeds max claimed degree afetr {folds} folds: {expected}"
+    )]
+    FinalPolynomialDegreeExceedsClaimedDegreeAfterFolds {
+        got: usize,
+        expected: usize,
+        folds: usize,
+    },
     #[error("roots len != rounds")]
     RootsNEtoQueryRounds,
     #[error("domain folded to constant sooner than expected")]
@@ -317,21 +327,37 @@ pub fn verify<F: PrimeField + FftField>(
     }
 
     // finall poly degree assertions
-    if proof.final_poly.len() < options.max_remainder_degree {
-        return Err(VerificationError::FinalPolynomialExceedMaxRemainderDegree);
+    let mut final_poly = proof.final_poly.clone();
+    trim_trailing_zeroes(&mut final_poly);
+
+    if final_poly.is_empty() {
+        return Err(VerificationError::BadProof);
     }
-    for c in proof
-        .final_poly
-        .iter()
-        .skip(options.max_remainder_degree + 1)
-    {
-        if !c.is_zero() {
-            return Err(VerificationError::VerificationFailed);
-        }
+
+    let deg = final_poly.len() - 1;
+
+    if deg > options.max_remainder_degree {
+        return Err(
+            VerificationError::FinalPolynomialDegreeExceedMaxRemainderDegree {
+                got: deg,
+                expected: options.max_remainder_degree,
+            },
+        );
+    }
+
+    let folded_degree = degree_after_folds(options.max_degree, proof.roots.len());
+    if deg > folded_degree {
+        return Err(
+            VerificationError::FinalPolynomialDegreeExceedsClaimedDegreeAfterFolds {
+                got: deg,
+                expected: folded_degree,
+                folds: proof.roots.len(),
+            },
+        );
     }
 
     // TODO: handle error
-    let final_tree = commit_evals(&proof.final_poly).unwrap();
+    let final_tree = commit_evals(&final_poly).unwrap();
     tx.absorb_digest("fri/final_poly", &final_tree.root());
     let mut g = domain.group_gen();
 
@@ -342,7 +368,7 @@ pub fn verify<F: PrimeField + FftField>(
 
     let final_domain =
         Radix2EvaluationDomain::<F>::new(final_domain_size).ok_or(VerificationError::BadProof)?;
-    let final_evals = final_domain.fft(&proof.final_poly);
+    let final_evals = final_domain.fft(&final_poly);
 
     for (q_i, query) in proof.queries.iter().enumerate() {
         let mut idx = tx.challenge_index("fri/query", (n0 / 2) as u64) as usize;
@@ -436,6 +462,13 @@ fn fold_evaluation_pair<F: Field>(left_value: F, right_value: F, x_inv: F, beta:
     // f_odd = ( f(w) - f(-w) ) / 2x
     let odd = (left_value - right_value) * inv2 * x_inv;
     even + beta * odd
+}
+
+fn degree_after_folds(max_degree: usize, folds: usize) -> usize {
+    let pow2 = 1 << folds;
+    let num = max_degree + pow2 - 1;
+
+    num / pow2
 }
 
 #[cfg(test)]
@@ -609,7 +642,7 @@ mod tests {
         let res = verify(&proof, &domain, &options, &mut tx);
         assert!(matches!(
             res,
-            Err(VerificationError::FinalPolynomialExceedMaxRemainderDegree)
+            Err(VerificationError::FinalPolynomialDegreeExceedsClaimedDegreeAfterFolds { .. })
         ));
     }
 }
