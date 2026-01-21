@@ -1,5 +1,3 @@
-use std::{u64, usize};
-
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, Transcript, verify_row,
 };
@@ -9,7 +7,7 @@ use ark_serialize::CanonicalSerialize;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
-pub struct FriProof<F: Field> {
+pub struct FriProof<F: PrimeField> {
     // Merkle roots per FRI step
     pub roots: Vec<Digest>,
     // Queries for each step of FRI, one per index queried
@@ -19,14 +17,14 @@ pub struct FriProof<F: Field> {
 
 /// FriQuery contains folds for each step of FRI
 #[derive(Debug, Clone)]
-pub struct FriQuery<F: Field> {
+pub struct FriQuery<F: PrimeField> {
     pub rounds: Vec<FriRound<F>>,
 }
 
 /// FriRound contains left and right addend of FRI folding scheme and their auth
 /// f(x), f(-x)
 #[derive(Debug, Clone)]
-pub struct FriRound<F: Field> {
+pub struct FriRound<F: PrimeField> {
     pub left: Opened<F>,
     pub right: Opened<F>,
 }
@@ -403,60 +401,20 @@ pub fn verify<F: PrimeField + FftField>(
         let rounds = &query.rounds;
         for (layer_i, round) in rounds.iter().enumerate() {
             let half = domain_size / 2;
-            if half == 0 {
-                return Err(VerificationError::QueriesBiggerThenFolds);
-            }
-
-            // index sanity checks
-            if round.left.path.index != idx {
-                return Err(VerificationError::MerkleAuthError {
-                    query: q_i,
-                    layer: layer_i,
-                    index: idx,
-                });
-            }
-            let expected_right_idx = (idx + half) % domain_size;
-            if round.right.path.index != expected_right_idx {
-                return Err(VerificationError::MerkleAuthError {
-                    query: q_i,
-                    layer: layer_i,
-                    index: expected_right_idx,
-                });
-            }
-            // verify merkle openings
-            let mut left_bytes = vec![];
-            round
-                .left
-                .value
-                .serialize_compressed(&mut left_bytes)
-                .unwrap();
-            if !verify_row::<Blake3Hasher>(&proof.roots[layer_i], &left_bytes, &round.left.path) {
-                return Err(VerificationError::MerkleAuthError {
-                    query: q_i,
-                    layer: layer_i,
-                    index: idx,
-                });
-            }
-
-            let mut right_bytes = vec![];
-            round
-                .right
-                .value
-                .serialize_compressed(&mut right_bytes)
-                .unwrap();
-            if !verify_row::<Blake3Hasher>(&proof.roots[layer_i], &right_bytes, &round.right.path) {
-                return Err(VerificationError::MerkleAuthError {
-                    query: q_i,
-                    layer: layer_i,
-                    index: expected_right_idx,
-                });
-            }
+            let (left_value, right_value) = verify_round_openings(
+                &proof.roots[layer_i],
+                idx,
+                q_i,
+                layer_i,
+                domain_size,
+                round,
+            )?;
 
             // fold
             let x = shift * g.pow([idx as u64]);
             let y = fold_evaluation_pair(
-                round.left.value,
-                round.right.value,
+                left_value,
+                right_value,
                 x.inverse().unwrap(),
                 betas[layer_i],
                 inv2,
@@ -500,6 +458,59 @@ fn degree_after_folds(max_degree: usize, folds: usize) -> usize {
 
     let denom: usize = 1usize << folds;
     max_degree / denom + usize::from(max_degree.is_multiple_of(denom))
+}
+
+fn verify_round_openings<F: PrimeField + CanonicalSerialize>(
+    root: &Digest,
+    index: usize,
+    query_index: usize,
+    layer_index: usize,
+    domain_size: usize,
+    round: &FriRound<F>,
+) -> Result<(F, F), VerificationError> {
+    let half = domain_size / 2;
+    if half == 0 {
+        return Err(VerificationError::QueriesBiggerThenFolds);
+    }
+
+    // verify left
+    let mut left_bytes_buffer = Vec::new();
+    round
+        .left
+        .value
+        .serialize_compressed(&mut left_bytes_buffer)
+        .unwrap();
+
+    if round.left.path.index != index
+        || !verify_row::<Blake3Hasher>(root, &left_bytes_buffer, &round.left.path)
+    {
+        return Err(VerificationError::MerkleAuthError {
+            query: query_index,
+            layer: layer_index,
+            index,
+        });
+    }
+
+    // verify right
+    let mut right_bytes_buffer = Vec::new();
+    let expected_right_index = (index + half) % domain_size;
+    round
+        .right
+        .value
+        .serialize_compressed(&mut right_bytes_buffer)
+        .unwrap();
+
+    if round.right.path.index != expected_right_index
+        || !verify_row::<Blake3Hasher>(root, &right_bytes_buffer, &round.right.path)
+    {
+        return Err(VerificationError::MerkleAuthError {
+            query: query_index,
+            layer: layer_index,
+            index: expected_right_index,
+        });
+    }
+
+    Ok((round.left.value, round.right.value))
 }
 
 #[cfg(test)]
