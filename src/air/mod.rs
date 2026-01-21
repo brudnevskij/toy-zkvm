@@ -1,5 +1,7 @@
 mod air;
 mod fibonacci;
-mod tests;
 
-pub use air::{ConstraintFunction, RowLDEView, TraceTable};
+pub use air::verify as zkvm_verify;
+pub use air::{ConstraintFunction, ProverRowLdeView, RowAccess, TraceTable};
+pub use air::{ZkvmProof, prove as zkvm_prove};
+
