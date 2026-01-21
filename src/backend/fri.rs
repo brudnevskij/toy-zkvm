@@ -38,12 +38,38 @@ pub struct Opened<F: Field> {
     pub path: AuthPath,
 }
 
+// ---- Transcript labels (single source of truth) ----
+// FRI options
+const MAX_DEGREE: &str = "max_degree";
+const MAX_REMAINDER_DEGREE: &str = "max_remainde_degree";
+const QUERY_NUMBER: &str = "query_vumber";
+const SHIFT: &str = "SHIFT";
+// commitments
+const ROOT: &str = "root";
+const FINAL_POLY: &str = "final_poly";
+
+// random challenges
+const BETA_I: &str = "beta_i";
+const QUERY_I: &str = "query_i";
+
 #[derive(Clone, Copy, Debug)]
 pub struct FriOptions<F: PrimeField> {
     pub max_degree: usize,
     pub max_remainder_degree: usize,
     pub query_number: usize,
     pub shift: F,
+}
+
+impl<F: PrimeField> FriOptions<F> {
+    fn seed_tx(&self, tx: &mut Transcript) {
+        tx.absorb_bytes(MAX_DEGREE, &self.max_degree.to_le_bytes());
+        tx.absorb_bytes(
+            MAX_REMAINDER_DEGREE,
+            &self.max_remainder_degree.to_le_bytes(),
+        );
+        tx.absorb_bytes(QUERY_NUMBER, &self.query_number.to_le_bytes());
+        tx.absorb_field(SHIFT, &self.shift);
+    }
 }
 
 #[derive(Error, Debug)]
@@ -112,13 +138,7 @@ pub fn prove<F: PrimeField + FftField>(
         });
     }
 
-    // add impl for options to absorb fri params
-    tx.absorb_params(initial_domain_size, 1, options.query_number);
-    tx.absorb_bytes("fri/max_degree", &options.max_degree.to_le_bytes());
-    tx.absorb_bytes(
-        "fri/max_remainder_degree",
-        &options.max_remainder_degree.to_le_bytes(),
-    );
+    options.seed_tx(tx);
 
     let mut evaluations_layers = vec![];
     let mut roots = vec![];
@@ -131,14 +151,14 @@ pub fn prove<F: PrimeField + FftField>(
     while current_max_degree > options.max_remainder_degree {
         let tree = commit_evals(&evals_i)?;
         let root = tree.root();
-        tx.absorb_digest("root", root);
+        tx.absorb_digest(ROOT, root);
 
         roots.push(*root);
         trees.push(tree);
         evaluations_layers.push(evals_i);
 
         // get challenge
-        let beta_i: F = tx.challenge_field("fri/beta_i");
+        let beta_i: F = tx.challenge_field(BETA_I);
         // fold
         let last = evaluations_layers.last().unwrap();
         evals_i = fold_once(last, g, beta_i, shift);
@@ -172,13 +192,13 @@ pub fn prove<F: PrimeField + FftField>(
     }
 
     let final_tree = commit_evals(&final_poly)?;
-    tx.absorb_digest("fri/final_poly", final_tree.root());
+    tx.absorb_digest(FINAL_POLY, final_tree.root());
 
     // query phase
     let mut queries = Vec::with_capacity(options.query_number);
     for _ in 0..options.query_number {
         let half = initial_domain_size >> 1;
-        let idx = tx.challenge_index("fri/query", half as u64) as usize;
+        let idx = tx.challenge_index(QUERY_I, half as u64) as usize;
         let q = produce_query(idx, initial_domain_size, &evaluations_layers, &trees)?;
         queries.push(q);
     }
@@ -319,18 +339,12 @@ pub fn verify<F: PrimeField + FftField>(
         return Err(VerificationError::BadProof);
     }
 
-    let num_queries = proof.queries.len();
-    tx.absorb_params(n0, 1, num_queries);
-    tx.absorb_bytes("fri/max_degree", &options.max_degree.to_le_bytes());
-    tx.absorb_bytes(
-        "fri/max_remainder_degree",
-        &options.max_remainder_degree.to_le_bytes(),
-    );
+    options.seed_tx(tx);
     let inv2 = F::from(2u64).inverse().expect("inverse");
     let mut betas = Vec::with_capacity(proof.roots.len());
     for root in &proof.roots {
-        tx.absorb_digest("root", root);
-        let beta: F = tx.challenge_field("fri/beta_i");
+        tx.absorb_digest(ROOT, root);
+        let beta: F = tx.challenge_field(BETA_I);
         betas.push(beta);
     }
 
@@ -366,7 +380,7 @@ pub fn verify<F: PrimeField + FftField>(
 
     // TODO: handle error
     let final_tree = commit_evals(&final_poly).unwrap();
-    tx.absorb_digest("fri/final_poly", final_tree.root());
+    tx.absorb_digest(FINAL_POLY, final_tree.root());
 
     let final_domain_size = n0 >> proof.roots.len(); // n0 / 2^k
     if final_domain_size < options.max_remainder_degree + 1 {
@@ -378,7 +392,7 @@ pub fn verify<F: PrimeField + FftField>(
     let final_evals = final_domain.fft(&final_poly);
 
     for (q_i, query) in proof.queries.iter().enumerate() {
-        let mut idx = tx.challenge_index("fri/query", (n0 / 2) as u64) as usize;
+        let mut idx = tx.challenge_index(QUERY_I, (n0 / 2) as u64) as usize;
         let mut domain_size = n0;
         let mut g = domain.group_gen();
         let mut shift = options.shift;
