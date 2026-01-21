@@ -1,4 +1,4 @@
-use std::usize;
+use std::{u64, usize};
 
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, MerkleError, MerkleTree, Transcript, verify_row,
@@ -38,9 +38,11 @@ pub struct Opened<F: Field> {
     pub path: AuthPath,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct FriOptions<F: PrimeField> {
     pub max_degree: usize,
     pub max_remainder_degree: usize,
+    pub query_number: usize,
     pub shift: F,
 }
 
@@ -52,6 +54,10 @@ pub enum ProofError {
     BadEvaluationsLength { got: usize, expected: usize },
     #[error("empty evaluations")]
     EmptyEvaluations,
+    #[error("final polynomial degree: {got} exceeds expected degree: {expected}, after folds")]
+    FinalPolynomialDegreeExceedMaxRemainderDegree { got: usize, expected: usize },
+    #[error("dinal domain gen mismatch with derived gen")]
+    FinalDomainGeneratorMismatch,
 
     #[error(transparent)]
     Merkle(#[from] MerkleError),
@@ -106,9 +112,8 @@ pub fn prove<F: PrimeField + FftField>(
         });
     }
 
-    // TODO: make num of queries scalable, move to options
-    let num_queries = 1;
-    tx.absorb_params(initial_domain_size, 1, num_queries);
+    // add impl for options to absorb fri params
+    tx.absorb_params(initial_domain_size, 1, options.query_number);
     tx.absorb_bytes("fri/max_degree", &options.max_degree.to_le_bytes());
     tx.absorb_bytes(
         "fri/max_remainder_degree",
@@ -136,39 +141,42 @@ pub fn prove<F: PrimeField + FftField>(
         let beta_i: F = tx.challenge_field("fri/beta_i");
         // fold
         let last = evaluations_layers.last().unwrap();
-        evals_i = fold_once(last, g, beta_i, options.shift);
+        evals_i = fold_once(last, g, beta_i, shift);
         // advance
         g = g.square();
         shift = shift.square();
 
         // halving upper bound
-        current_max_degree = (current_max_degree + 1) / 2;
+        current_max_degree = current_max_degree.div_ceil(2);
     }
 
     // interpolating final poly
     let final_domain_size = initial_domain_size >> roots.len(); // N / 2^n_folds
+    // TODO: handle as errors
     assert_eq!(final_domain_size, evals_i.len());
     assert!(final_domain_size > options.max_remainder_degree);
 
-    // TODO: handle error
     let final_domain = Radix2EvaluationDomain::new(final_domain_size).unwrap();
-    assert_eq!(g, final_domain.group_gen());
+    if g != final_domain.group_gen() {
+        return Err(ProofError::FinalDomainGeneratorMismatch);
+    }
+
     let mut final_poly = final_domain.ifft(&evals_i);
     trim_trailing_zeroes(&mut final_poly);
-    assert!(
-        final_poly.len() <= options.max_remainder_degree,
-        "final poly degree: {0} must be less than max remainder degree: {1} \n final poly: {2:?}",
-        final_poly.len(),
-        options.max_remainder_degree,
-        final_poly
-    );
+
+    if final_poly.len() - 1 > options.max_remainder_degree {
+        return Err(ProofError::FinalPolynomialDegreeExceedMaxRemainderDegree {
+            got: final_poly.len() - 1,
+            expected: options.max_remainder_degree,
+        });
+    }
 
     let final_tree = commit_evals(&final_poly)?;
     tx.absorb_digest("fri/final_poly", final_tree.root());
 
     // query phase
-    let mut queries = Vec::with_capacity(num_queries);
-    for _ in 0..num_queries {
+    let mut queries = Vec::with_capacity(options.query_number);
+    for _ in 0..options.query_number {
         let half = initial_domain_size >> 1;
         let idx = tx.challenge_index("fri/query", half as u64) as usize;
         let q = produce_query(idx, initial_domain_size, &evaluations_layers, &trees)?;
@@ -261,7 +269,7 @@ fn fold_once<F: PrimeField + FftField>(evals: &[F], g: F, beta: F, shift: F) -> 
 
         out.push(f_even + beta * f_odd);
 
-        invx = invx * ginv
+        invx *= ginv
     }
     out
 }
@@ -307,7 +315,7 @@ pub fn verify<F: PrimeField + FftField>(
     tx: &mut Transcript,
 ) -> Result<(), VerificationError> {
     let n0 = domain.size();
-    if n0 == 0 || proof.roots.is_empty() || proof.queries.len() == 0 {
+    if n0 == 0 || proof.roots.is_empty() || proof.queries.is_empty() {
         return Err(VerificationError::BadProof);
     }
 
@@ -358,8 +366,7 @@ pub fn verify<F: PrimeField + FftField>(
 
     // TODO: handle error
     let final_tree = commit_evals(&final_poly).unwrap();
-    tx.absorb_digest("fri/final_poly", &final_tree.root());
-    let mut g = domain.group_gen();
+    tx.absorb_digest("fri/final_poly", final_tree.root());
 
     let final_domain_size = n0 >> proof.roots.len(); // n0 / 2^k
     if final_domain_size < options.max_remainder_degree + 1 {
@@ -373,7 +380,8 @@ pub fn verify<F: PrimeField + FftField>(
     for (q_i, query) in proof.queries.iter().enumerate() {
         let mut idx = tx.challenge_index("fri/query", (n0 / 2) as u64) as usize;
         let mut domain_size = n0;
-        g = domain.group_gen();
+        let mut g = domain.group_gen();
+        let mut shift = options.shift;
 
         if query.rounds.len() != proof.roots.len() {
             return Err(VerificationError::RootsNEtoQueryRounds);
@@ -431,7 +439,7 @@ pub fn verify<F: PrimeField + FftField>(
             }
 
             // fold
-            let x = options.shift * g.pow([idx as u64]);
+            let x = shift * g.pow([idx as u64]);
             let y = fold_evaluation_pair(
                 round.left.value,
                 round.right.value,
@@ -451,6 +459,7 @@ pub fn verify<F: PrimeField + FftField>(
             idx %= half;
             domain_size = half;
             g = g.square();
+            shift = shift.square();
         }
     }
     Ok(())
@@ -465,10 +474,18 @@ fn fold_evaluation_pair<F: Field>(left_value: F, right_value: F, x_inv: F, beta:
 }
 
 fn degree_after_folds(max_degree: usize, folds: usize) -> usize {
-    let pow2 = 1 << folds;
-    let num = max_degree + pow2 - 1;
+    if folds == 0 {
+        return max_degree;
+    }
+    if max_degree == 0 {
+        return 0;
+    }
+    if folds >= usize::BITS as usize {
+        return 1;
+    }
 
-    num / pow2
+    let denom: usize = 1usize << folds;
+    max_degree / denom + usize::from(max_degree.is_multiple_of(denom))
 }
 
 #[cfg(test)]
@@ -531,6 +548,7 @@ mod tests {
             max_degree: 1533,
             max_remainder_degree: 3,
             shift: Fr::one(),
+            query_number: 10,
         };
 
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
@@ -552,6 +570,7 @@ mod tests {
             max_degree: 1533,
             max_remainder_degree: 1,
             shift: Fr::one(),
+            query_number: 10,
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("prove should succeed");
@@ -575,6 +594,7 @@ mod tests {
             max_degree: 1533,
             max_remainder_degree: 1,
             shift,
+            query_number: 10,
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("prove should succeed");
@@ -626,7 +646,7 @@ mod tests {
         // N = 2^15
         let n = 32768usize;
         let domain = pick_domain::<Fr>(n);
-        let coeffs = random_poly(1533, 1337);
+        let coeffs = random_poly(1024, 1337);
 
         let seed = b"fri-seed-1";
         let mut tx = Transcript::new(b"transcript", seed);
@@ -634,6 +654,7 @@ mod tests {
             max_degree: 1000,
             max_remainder_degree: 100,
             shift: Fr::one(),
+            query_number: 10,
         };
         let proof = prove_from_coefficients::<Fr>(&coeffs, &domain, &options, &mut tx)
             .expect("should succeed");
