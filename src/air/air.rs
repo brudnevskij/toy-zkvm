@@ -1,5 +1,3 @@
-use std::option;
-
 use crate::backend::{
     AuthPath, Blake3Hasher, Digest, FriOptions, FriProof, FriProofError, FriQuery,
     FriVerificationError, Hasher, MerkleError, MerkleTree, Transcript, fri_prove, fri_verify,
@@ -95,6 +93,7 @@ impl<'a, F: PrimeField> RowAccess<F> for ProverRowLdeView<'a, F> {
 
 pub type ConstraintFunction<F> = fn(&dyn RowAccess<F>) -> F;
 
+#[derive(Clone, Debug)]
 pub struct TraceQuery<F: PrimeField> {
     pub i: usize,
     pub current_row: Vec<F>, // at i
@@ -111,6 +110,7 @@ pub const LDE_DOMAIN_SIZE_LABEL: &str = "lde_domain_size";
 pub const SHIFT_LABEL: &str = "shift";
 pub const FRI_MAX_DEGREE_LABEL: &str = "fri_max_degree";
 pub const FRI_MAX_REMAINDER_DEGREE_LABEL: &str = "fri_max_remainder_degree";
+pub const FRI_NUM_QUERIES: &str = "FRI_NUM_QUERIES";
 
 // commitments / roots
 pub const TRACE_ROOT_LABEL: &str = "trace_root";
@@ -130,8 +130,8 @@ pub struct ZkvmPublicParameters<F: PrimeField> {
     pub trace_domain: Radix2EvaluationDomain<F>,
     pub lde_domain: Radix2EvaluationDomain<F>,
     pub shift: F,
-    pub fri_max_degree: usize,
-    pub fri_max_remainder_degree: usize,
+
+    pub fri_options: FriOptions<F>,
 }
 
 // TODO: consider adding constructor with domain assertions
@@ -143,10 +143,17 @@ impl<F: PrimeField> ZkvmPublicParameters<F> {
         );
         tx.absorb_bytes(LDE_DOMAIN_SIZE_LABEL, &self.lde_domain.size().to_le_bytes());
         tx.absorb_field(SHIFT_LABEL, &self.shift);
-        tx.absorb_bytes(FRI_MAX_DEGREE_LABEL, &self.fri_max_degree.to_le_bytes());
+        tx.absorb_bytes(
+            FRI_MAX_DEGREE_LABEL,
+            &self.fri_options.max_degree.to_le_bytes(),
+        );
         tx.absorb_bytes(
             FRI_MAX_REMAINDER_DEGREE_LABEL,
-            &self.fri_max_remainder_degree.to_le_bytes(),
+            &self.fri_options.max_remainder_degree.to_le_bytes(),
+        );
+        tx.absorb_bytes(
+            FRI_NUM_QUERIES,
+            &self.fri_options.query_number.to_le_bytes(),
         );
     }
 }
@@ -175,6 +182,7 @@ pub enum ZkvmProveError {
     BadFriQuery,
 }
 
+#[derive(Clone, Debug)]
 pub struct ZkvmProof<F: PrimeField> {
     /// Commitments
     pub trace_root: Digest, // Merkle root for LDE evaluations
@@ -195,8 +203,7 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         trace_domain,
         lde_domain,
         shift: _,
-        fri_max_degree,
-        fri_max_remainder_degree,
+        fri_options,
     } = public_params;
 
     let shift = public_params.shift;
@@ -225,12 +232,12 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
     let mut disguised_evaluations: Vec<Vec<F>> = Vec::with_capacity(num_columns);
 
     for column in trace.columns.iter() {
-        disguised_evaluations.push(lde_extend_column(column, &trace_domain, &lde_domain, shift));
+        disguised_evaluations.push(lde_extend_column(column, trace_domain, lde_domain, shift));
     }
 
     let trace_tree = generate_trace_tree(lde_domain_size, &disguised_evaluations)?;
     let trace_root = trace_tree.root();
-    tx.absorb_digest(TRACE_ROOT_LABEL, &trace_root);
+    tx.absorb_digest(TRACE_ROOT_LABEL, trace_root);
 
     // generating alphas for future mixing
     let alphas: Vec<F> = generate_mixing_challenges(constraints.len(), tx);
@@ -244,13 +251,7 @@ pub fn prove<F: PrimeField + FftField + CanonicalSerialize>(
         constraints,
     )?;
 
-    let fri_options = FriOptions {
-        max_degree: *fri_max_degree,
-        max_remainder_degree: *fri_max_remainder_degree,
-        shift,
-    };
-
-    let fri_proof = fri_prove(&verification_evaluations, lde_domain, &fri_options, tx)?;
+    let fri_proof = fri_prove(&verification_evaluations, lde_domain, fri_options, tx)?;
 
     // open same indexes as in fri
     let trace_queries = generate_trace_queries(
@@ -323,7 +324,7 @@ fn construct_verification_evaluations<F: PrimeField>(
     for i in 0..lde_domain_size {
         let previous_step_index = (i + lde_domain_size - blowup_factor) % lde_domain_size;
         let x = shift * lde_domain.element(i);
-        let z_h = x.pow(&[trace_domain_size as u64]) - F::one();
+        let z_h = x.pow([trace_domain_size as u64]) - F::one();
         let z_h_inverse = z_h
             .inverse()
             .ok_or(ZkvmProveError::VanishingPolyNotInvertible { i })?;
@@ -452,6 +453,7 @@ pub enum ZkvmVerifyError {
     VanishingPolyNotInvertible { i: usize },
 }
 
+#[derive(Clone, Debug)]
 struct VerifierRowLdeView<'a, F: PrimeField> {
     pub i: usize,
     pub previous_i: usize,
@@ -541,11 +543,8 @@ pub fn verify<F: PrimeField>(
         let current_row_merkle_verificattion =
             verify_leaf::<Blake3Hasher>(&proof.trace_root, &current_row_digest, current_row_path);
         let previous_row_digest = hash_trace_row_iter(previous_i, previous_row.iter());
-        let previous_row_merkle_verification = verify_leaf::<Blake3Hasher>(
-            &proof.trace_root,
-            &previous_row_digest,
-            &previous_row_path,
-        );
+        let previous_row_merkle_verification =
+            verify_leaf::<Blake3Hasher>(&proof.trace_root, &previous_row_digest, previous_row_path);
 
         if !(current_row_merkle_verificattion && previous_row_merkle_verification) {
             return Err(ZkvmVerifyError::MerkleVerificationFailed {
@@ -556,7 +555,7 @@ pub fn verify<F: PrimeField>(
 
         // compute verification polynomial evaluations for a given i
         let x = public_params.shift * public_params.lde_domain.element(i);
-        let z_h = x.pow(&[trace_domain_size as u64]) - F::one();
+        let z_h = x.pow([trace_domain_size as u64]) - F::one();
         let z_h_inverse = z_h
             .inverse()
             .ok_or(ZkvmVerifyError::VanishingPolyNotInvertible { i })?;
@@ -583,16 +582,10 @@ pub fn verify<F: PrimeField>(
         }
     }
 
-    let fri_options = FriOptions {
-        max_degree: public_params.fri_max_degree,
-        max_remainder_degree: public_params.fri_max_remainder_degree,
-        shift: public_params.shift,
-    };
-
     fri_verify(
         &proof.fri_proof,
         &public_params.lde_domain,
-        &fri_options,
+        &public_params.fri_options,
         tx,
     )?;
     Ok(())
