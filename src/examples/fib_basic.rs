@@ -58,8 +58,6 @@ fn final_value_boundary<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
 
 #[cfg(test)]
 mod tests {
-    use std::usize;
-
     use super::*;
     use crate::{
         air::{
