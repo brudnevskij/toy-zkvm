@@ -19,7 +19,7 @@ impl FibonacciColumns {
     }
 }
 
-// n 64
+// n 128
 const FIBONACCI_SEQUENCE_FINAL_VALUE: u128 = 251728825683549488150424261;
 
 fn time_step_boundary_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
@@ -66,42 +66,20 @@ mod tests {
             zkvm_prove, zkvm_verify,
         },
         backend::{FriOptions, FriProofError, Transcript},
+        examples::calculate_fibonacci_seq,
         test_utils::{pick_coset_shift, pick_domain},
     };
     use ark_bn254::Fr;
-    use ark_ff::{One, Zero};
-
-    fn calculate_fibonacci_seq<F: PrimeField>(n: usize) -> Vec<F> {
-        match n {
-            0 => vec![],
-            1 => vec![F::one()],
-            _ => {
-                let mut sequence = Vec::with_capacity(n);
-                sequence.push(F::one());
-                sequence.push(F::one());
-
-                for i in 2..n {
-                    let next_value = sequence[i - 1] + sequence[i - 2];
-                    sequence.push(next_value);
-                }
-
-                sequence
-            }
-        }
-    }
+    use ark_ff::Zero;
 
     fn compute_fibonacci_trace(n: usize) -> TraceTable<Fr> {
-        let fib_seq_128 = calculate_fibonacci_seq::<Fr>(n);
-        let mut a_column = fib_seq_128
-            .clone()
-            .into_iter()
-            .take(n - 1)
-            .collect::<Vec<_>>();
+        let fib_seq = calculate_fibonacci_seq::<Fr>(n);
+        let mut a_column = fib_seq.clone().into_iter().take(n - 1).collect::<Vec<_>>();
         a_column.insert(0, Fr::zero());
-        let b_column = fib_seq_128;
+        let b_column = fib_seq;
         let t_column = (1..=n).map(|i| Fr::from(i as i64)).collect();
         let columns = vec![t_column, a_column, b_column];
-        let names = vec!["t", "A", "B"];
+        let names = vec!["t".to_string(), "A".to_string(), "B".to_string()];
 
         TraceTable::new(columns, names)
     }
@@ -190,7 +168,7 @@ mod tests {
         t_column[trace_size - 1] = Fr::from(0);
 
         let columns = vec![t_column, a_column, b_column];
-        let names = vec!["t", "A", "B"];
+        let names = vec!["t".to_string(), "A".to_string(), "B".to_string()];
         let trace_table = TraceTable::new(columns, names);
 
         // setting the constraintslet
