@@ -42,15 +42,6 @@ impl Transcript {
         self.absorb_bytes(label, d);
     }
 
-    /// Convenience: absorb common FRI params.
-    pub fn absorb_params(&mut self, domain_size: usize, terminal_size: usize, num_queries: usize) {
-        let mut v = Vec::with_capacity(24);
-        v.extend_from_slice(&(domain_size as u64).to_le_bytes());
-        v.extend_from_slice(&(terminal_size as u64).to_le_bytes());
-        v.extend_from_slice(&(num_queries as u64).to_le_bytes());
-        self.absorb_bytes("fri/params", &v);
-    }
-
     /// Derive `n` pseudo-random bytes from the transcript (domain-separated by label + counter).
     pub fn challenge_bytes(&mut self, label: &str, n: usize) -> Vec<u8> {
         let mut base = blake3::Hasher::new();
@@ -104,9 +95,6 @@ mod tests {
     fn determinism() {
         let mut t1 = Transcript::new(b"fri/v1", b"seed123");
         let mut t2 = Transcript::new(b"fri/v1", b"seed123");
-
-        t1.absorb_params(1024, 32, 40);
-        t2.absorb_params(1024, 32, 40);
 
         let beta1: Fr = t1.challenge_field("beta/0");
         let beta2: Fr = t2.challenge_field("beta/0");

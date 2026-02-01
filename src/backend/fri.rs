@@ -112,7 +112,6 @@ pub fn prove<F: PrimeField + FftField>(
     tx: &mut Transcript,
 ) -> Result<FriProof<F>, ProofError> {
     let initial_domain_size = initial_domain.size();
-    // TODO: handle as errors
     assert!(initial_domain_size > 0, "empty domain");
     assert!(
         options.max_remainder_degree > 0,

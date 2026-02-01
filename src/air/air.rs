@@ -463,18 +463,18 @@ fn generate_trace_queries<F: PrimeField>(
 /// and finally FFTing them back on the extended domain
 fn lde_extend_column<F: FftField>(
     column: &[F],
-    domain_n: &Radix2EvaluationDomain<F>,
-    domain_m: &Radix2EvaluationDomain<F>,
+    initial_domain: &Radix2EvaluationDomain<F>,
+    lde_domain: &Radix2EvaluationDomain<F>,
     shift: F,
 ) -> Vec<F> {
-    let n = domain_n.size();
-    let m = domain_m.size();
+    let n = initial_domain.size();
+    let m = lde_domain.size();
     assert_eq!(n, column.len());
     assert_eq!(m % n, 0);
 
     // interpolating column over domain n
     let mut coeffs = column.to_vec();
-    domain_n.ifft_in_place(&mut coeffs);
+    initial_domain.ifft_in_place(&mut coeffs);
 
     // scaling coefficients by shift^k so LDE is f(sx)
     let mut pow = F::one();
@@ -485,7 +485,7 @@ fn lde_extend_column<F: FftField>(
 
     // scale and fft to the LDE domain
     coeffs.resize(m, F::zero());
-    domain_m.fft_in_place(&mut coeffs);
+    lde_domain.fft_in_place(&mut coeffs);
     coeffs
 }
 
