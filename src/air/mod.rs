@@ -13,7 +13,10 @@ pub trait RowAccess<F: PrimeField> {
     fn z_h_inverse(&self) -> F;
 }
 
-pub type ConstraintFunction<F> = fn(&dyn RowAccess<F>) -> F;
+pub trait Constraint<F: PrimeField>: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn eval(&self, row: &dyn RowAccess<F>) -> F;
+}
 
 pub trait Air<F: PrimeField> {
     fn width(&self) -> usize;

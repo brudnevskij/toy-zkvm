@@ -1,13 +1,13 @@
 use ark_ff::PrimeField;
 
-use crate::air::{Air, ConstraintFunction, RowAccess};
+use crate::air::{Air, Constraint, RowAccess};
 
 mod fib_basic;
 mod fib_padded;
 
 struct FibAir<F: PrimeField> {
     width: usize,
-    constraints: Vec<ConstraintFunction<F>>,
+    constraints: Vec<Box<dyn Constraint<F>>>,
 }
 
 impl<F: PrimeField> Air<F> for FibAir<F> {
@@ -20,7 +20,7 @@ impl<F: PrimeField> Air<F> for FibAir<F> {
     }
 
     fn eval_constraint(&self, i: usize, row: &dyn RowAccess<F>) -> F {
-        (self.constraints[i])(row)
+        self.constraints[i].eval(row)
     }
 }
 

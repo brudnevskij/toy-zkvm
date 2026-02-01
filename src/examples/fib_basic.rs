@@ -1,6 +1,6 @@
 use ark_ff::PrimeField;
 
-use crate::air::{Air, ConstraintFunction, RowAccess};
+use crate::air::{Air, Constraint, RowAccess};
 use FibonacciColumns::{SequenceValuesA, SequenceValuesB, TimeStep};
 
 enum FibonacciColumns {
@@ -22,43 +22,97 @@ impl FibonacciColumns {
 // n 128
 const FIBONACCI_SEQUENCE_FINAL_VALUE: u128 = 251728825683549488150424261;
 
-fn time_step_boundary_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let num = row.current_step_column_value(TimeStep.idx()) - F::one();
-    let denom = row.x() - row.x0();
-    num * denom.inverse().unwrap()
+// ---------------- Constraints  ----------------
+
+struct TimeStepBoundary {
+    time_col: usize,
 }
 
-fn time_step_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let t_cur = row.current_step_column_value(TimeStep.idx());
-    let t_previous = row.previous_step_column_value(TimeStep.idx());
-    (row.x() - row.x0()) * (t_cur - t_previous - F::one()) * row.z_h_inverse()
+impl<F: PrimeField> Constraint<F> for TimeStepBoundary {
+    fn name(&self) -> &'static str {
+        "time_step_boundary"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let num = row.current_step_column_value(self.time_col) - F::one();
+        let denom = row.x() - row.x0();
+        num * denom.inverse().unwrap()
+    }
 }
 
-fn a_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let cur_a = row.current_step_column_value(SequenceValuesA.idx());
-    let previous_b = row.previous_step_column_value(SequenceValuesB.idx());
-    (row.x() - row.x0()) * (cur_a - previous_b) * row.z_h_inverse()
+struct TimeStepTransition {
+    time_col: usize,
 }
 
-fn b_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let b_cur = row.current_step_column_value(SequenceValuesB.idx());
-    let b_previos = row.previous_step_column_value(SequenceValuesB.idx());
-    let a_previous = row.previous_step_column_value(SequenceValuesA.idx());
-    (row.x() - row.x0()) * (b_cur - b_previos - a_previous) * row.z_h_inverse()
+impl<F: PrimeField> Constraint<F> for TimeStepTransition {
+    fn name(&self) -> &'static str {
+        "time_step_transition"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let t_cur = row.current_step_column_value(self.time_col);
+        let t_prev = row.previous_step_column_value(self.time_col);
+        (row.x() - row.x0()) * (t_cur - t_prev - F::one()) * row.z_h_inverse()
+    }
 }
 
-fn final_value_boundary<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let num = row.current_step_column_value(SequenceValuesB.idx())
-        - F::from(FIBONACCI_SEQUENCE_FINAL_VALUE);
-    let denom = row.x() - row.x_last();
-    num * denom.inverse().unwrap()
+struct ATransition {
+    a_col: usize,
+    b_col: usize,
+}
+
+impl<F: PrimeField> Constraint<F> for ATransition {
+    fn name(&self) -> &'static str {
+        "a_transition"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let cur_a = row.current_step_column_value(self.a_col);
+        let prev_b = row.previous_step_column_value(self.b_col);
+        (row.x() - row.x0()) * (cur_a - prev_b) * row.z_h_inverse()
+    }
+}
+
+struct BTransition {
+    a_col: usize,
+    b_col: usize,
+}
+
+impl<F: PrimeField> Constraint<F> for BTransition {
+    fn name(&self) -> &'static str {
+        "b_transition"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let b_cur = row.current_step_column_value(self.b_col);
+        let b_prev = row.previous_step_column_value(self.b_col);
+        let a_prev = row.previous_step_column_value(self.a_col);
+        (row.x() - row.x0()) * (b_cur - b_prev - a_prev) * row.z_h_inverse()
+    }
+}
+
+struct FinalValueBoundary {
+    b_col: usize,
+    final_value: u128,
+}
+
+impl<F: PrimeField> Constraint<F> for FinalValueBoundary {
+    fn name(&self) -> &'static str {
+        "final_value_boundary"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let num = row.current_step_column_value(self.b_col) - F::from(self.final_value);
+        let denom = row.x() - row.x_last();
+        num * denom.inverse().unwrap()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        air::{ConstraintFunction, TraceTable},
+        air::{Constraint, TraceTable},
         backend::{FriOptions, FriProofError, Transcript},
         examples::{FibAir, calculate_fibonacci_seq},
         test_utils::{pick_coset_shift, pick_domain},
@@ -77,6 +131,26 @@ mod tests {
         let names = vec!["t".to_string(), "A".to_string(), "B".to_string()];
 
         TraceTable::new(columns, names)
+    }
+
+    fn make_fib_air<F: PrimeField>() -> FibAir<F> {
+        let time = FibonacciColumns::TimeStep.idx();
+        let a = FibonacciColumns::SequenceValuesA.idx();
+        let b = FibonacciColumns::SequenceValuesB.idx();
+
+        FibAir {
+            width: 3,
+            constraints: vec![
+                Box::new(TimeStepBoundary { time_col: time }),
+                Box::new(TimeStepTransition { time_col: time }),
+                Box::new(ATransition { a_col: a, b_col: b }),
+                Box::new(BTransition { a_col: a, b_col: b }),
+                Box::new(FinalValueBoundary {
+                    b_col: b,
+                    final_value: FIBONACCI_SEQUENCE_FINAL_VALUE,
+                }),
+            ],
+        }
     }
 
     #[test]
@@ -106,20 +180,7 @@ mod tests {
 
         let trace_table = compute_fibonacci_trace(trace_size);
 
-        // setting the constraintslet
-        let constraints: Vec<ConstraintFunction<Fr>> = vec![
-            time_step_boundary_constraint::<Fr>,
-            time_step_transition_constraint::<Fr>,
-            a_transition_constraint::<Fr>,
-            b_transition_constraint::<Fr>,
-            final_value_boundary::<Fr>,
-        ];
-
-        let air = FibAir {
-            width: trace_table.num_cols(),
-            constraints,
-        };
-
+        let air = make_fib_air();
         let proof =
             prove(&trace_table, &air, &mut tx, &public_params).expect("prove should succeed");
 
@@ -170,19 +231,7 @@ mod tests {
         let names = vec!["t".to_string(), "A".to_string(), "B".to_string()];
         let trace_table = TraceTable::new(columns, names);
 
-        // setting the constraintslet
-        let constraints: Vec<ConstraintFunction<Fr>> = vec![
-            time_step_boundary_constraint::<Fr>,
-            time_step_transition_constraint::<Fr>,
-            a_transition_constraint::<Fr>,
-            b_transition_constraint::<Fr>,
-            final_value_boundary::<Fr>,
-        ];
-
-        let air = FibAir {
-            width: trace_table.num_cols(),
-            constraints,
-        };
+        let air = make_fib_air();
 
         let res = prove(&trace_table, &air, &mut tx, &public_params);
         assert!(matches!(

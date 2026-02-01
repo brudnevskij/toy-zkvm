@@ -1,4 +1,4 @@
-use crate::air::RowAccess;
+use crate::air::{Constraint, RowAccess};
 use FibonacciColumns::{
     InitControl, SequenceValuesA, SequenceValuesB, TerminationControl, TimeStep, TransitionControl,
 };
@@ -42,69 +42,158 @@ const FIBONACCI_SEQUENCE_FINAL_VALUE: u128 = 251728825683549488150424261;
 const FIBONACCI_SEQUENCE_INIT_VALUE_A: u128 = 70492524767089125814114;
 const FIBONACCI_SEQUENCE_INIT_VALUE_B: u128 = 114059301025943970552219;
 
-// Constraints
-fn time_step_boundary_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let boundary = row.current_step_column_value(TimeStep.idx()) - F::one();
-    boundary * row.current_step_column_value(InitControl.idx()) * row.z_h_inverse()
+// ---------------- Constraints ----------------
+struct TimeStepBoundary {
+    time_col: usize,
+    init_ctrl_col: usize,
 }
 
-fn time_step_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let transition = row.current_step_column_value(TimeStep.idx())
-        - row.previous_step_column_value(TimeStep.idx())
-        - F::one();
-    transition * row.current_step_column_value(TransitionControl.idx()) * row.z_h_inverse()
+impl<F: PrimeField> Constraint<F> for TimeStepBoundary {
+    fn name(&self) -> &'static str {
+        "time_step_boundary"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let boundary = row.current_step_column_value(self.time_col) - F::one();
+        boundary * row.current_step_column_value(self.init_ctrl_col) * row.z_h_inverse()
+    }
 }
 
-fn column_a_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    // a_{i-1}
-    let current_a = row.current_step_column_value(SequenceValuesA.idx());
-    // a_{i-1}
-    let previous_b = row.previous_step_column_value(SequenceValuesB.idx());
-    let transition_control = row.current_step_column_value(TransitionControl.idx());
-
-    (current_a - previous_b) * transition_control * row.z_h_inverse()
+struct TimeStepTransition {
+    time_col: usize,
+    transition_ctrl_col: usize,
 }
 
-fn column_b_transition_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    // a_i
-    let current_b = row.current_step_column_value(SequenceValuesB.idx());
-    // a_{i-1}
-    let previous_b = row.previous_step_column_value(SequenceValuesB.idx());
-    // a_{i-2}
-    let previous_a = row.previous_step_column_value(SequenceValuesA.idx());
-    let transsition_control = row.current_step_column_value(TransitionControl.idx());
+impl<F: PrimeField> Constraint<F> for TimeStepTransition {
+    fn name(&self) -> &'static str {
+        "time_step_transition"
+    }
 
-    (current_b - previous_b - previous_a) * transsition_control * row.z_h_inverse()
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let transition = row.current_step_column_value(self.time_col)
+            - row.previous_step_column_value(self.time_col)
+            - F::one();
+        transition * row.current_step_column_value(self.transition_ctrl_col) * row.z_h_inverse()
+    }
 }
 
-fn termination_value_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let current_b = row.current_step_column_value(SequenceValuesB.idx());
-    let termination_control = row.current_step_column_value(TerminationControl.idx());
-
-    (current_b - F::from(FIBONACCI_SEQUENCE_FINAL_VALUE)) * termination_control * row.z_h_inverse()
+struct ATransition {
+    a_col: usize,
+    b_col: usize,
+    transition_ctrl_col: usize,
 }
 
-fn column_a_init_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let current_a = row.current_step_column_value(SequenceValuesA.idx());
-    let init_control = row.current_step_column_value(InitControl.idx());
+impl<F: PrimeField> Constraint<F> for ATransition {
+    fn name(&self) -> &'static str {
+        "a_transition"
+    }
 
-    (current_a - F::from(FIBONACCI_SEQUENCE_INIT_VALUE_A)) * init_control * row.z_h_inverse()
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let current_a = row.current_step_column_value(self.a_col);
+        let previous_b = row.previous_step_column_value(self.b_col);
+        let ctrl = row.current_step_column_value(self.transition_ctrl_col);
+        (current_a - previous_b) * ctrl * row.z_h_inverse()
+    }
 }
 
-fn column_b_init_constraint<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    let current_b = row.current_step_column_value(SequenceValuesB.idx());
-    let init_control = row.current_step_column_value(InitControl.idx());
-
-    (current_b - F::from(FIBONACCI_SEQUENCE_INIT_VALUE_B)) * init_control * row.z_h_inverse()
+struct BTransition {
+    a_col: usize,
+    b_col: usize,
+    transition_ctrl_col: usize,
 }
 
+impl<F: PrimeField> Constraint<F> for BTransition {
+    fn name(&self) -> &'static str {
+        "b_transition"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let current_b = row.current_step_column_value(self.b_col);
+        let previous_b = row.previous_step_column_value(self.b_col);
+        let previous_a = row.previous_step_column_value(self.a_col);
+        let ctrl = row.current_step_column_value(self.transition_ctrl_col);
+        (current_b - previous_b - previous_a) * ctrl * row.z_h_inverse()
+    }
+}
+
+struct TerminationValue {
+    b_col: usize,
+    termination_ctrl_col: usize,
+    final_value: u128,
+}
+
+impl<F: PrimeField> Constraint<F> for TerminationValue {
+    fn name(&self) -> &'static str {
+        "termination_value"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let current_b = row.current_step_column_value(self.b_col);
+        let ctrl = row.current_step_column_value(self.termination_ctrl_col);
+        (current_b - F::from(self.final_value)) * ctrl * row.z_h_inverse()
+    }
+}
+
+struct AInit {
+    a_col: usize,
+    init_ctrl_col: usize,
+    init_value: u128,
+}
+
+impl<F: PrimeField> Constraint<F> for AInit {
+    fn name(&self) -> &'static str {
+        "a_init"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let current_a = row.current_step_column_value(self.a_col);
+        let ctrl = row.current_step_column_value(self.init_ctrl_col);
+        (current_a - F::from(self.init_value)) * ctrl * row.z_h_inverse()
+    }
+}
+
+struct BInit {
+    b_col: usize,
+    init_ctrl_col: usize,
+    init_value: u128,
+}
+
+impl<F: PrimeField> Constraint<F> for BInit {
+    fn name(&self) -> &'static str {
+        "b_init"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let current_b = row.current_step_column_value(self.b_col);
+        let ctrl = row.current_step_column_value(self.init_ctrl_col);
+        (current_b - F::from(self.init_value)) * ctrl * row.z_h_inverse()
+    }
+}
+
+// Optional but recommended: booleanity for control columns.
+// This fixes the “controls are witness, prover can cheat by setting to 0” class of issues
+// *partially* (you still need constraints tying them to correct positions).
+struct Booleanity {
+    col: usize,
+}
+
+impl<F: PrimeField> Constraint<F> for Booleanity {
+    fn name(&self) -> &'static str {
+        "booleanity"
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let v = row.current_step_column_value(self.col);
+        (v * (v - F::one())) * row.z_h_inverse()
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::u64;
 
     use super::*;
     use crate::{
-        air::{ConstraintFunction, TraceTable},
+        air::TraceTable,
         backend::{FriOptions, Transcript},
         examples::{FibAir, calculate_fibonacci_seq},
         test_utils::{pick_coset_shift, pick_domain},
@@ -141,6 +230,58 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(seed);
         for _ in column_size..padding_sise {
             column.push(F::rand(&mut rng));
+        }
+    }
+
+    pub fn make_padded_fib_air<F: PrimeField>() -> FibAir<F> {
+        let time = FibonacciColumns::TimeStep.idx();
+        let a = FibonacciColumns::SequenceValuesA.idx();
+        let b = FibonacciColumns::SequenceValuesB.idx();
+        let tr = FibonacciColumns::TransitionControl.idx();
+        let init = FibonacciColumns::InitControl.idx();
+        let term = FibonacciColumns::TerminationControl.idx();
+
+        FibAir {
+            width: 6,
+            constraints: vec![
+                Box::new(TimeStepBoundary {
+                    time_col: time,
+                    init_ctrl_col: init,
+                }),
+                Box::new(TimeStepTransition {
+                    time_col: time,
+                    transition_ctrl_col: tr,
+                }),
+                Box::new(ATransition {
+                    a_col: a,
+                    b_col: b,
+                    transition_ctrl_col: tr,
+                }),
+                Box::new(BTransition {
+                    a_col: a,
+                    b_col: b,
+                    transition_ctrl_col: tr,
+                }),
+                Box::new(TerminationValue {
+                    b_col: b,
+                    termination_ctrl_col: term,
+                    final_value: FIBONACCI_SEQUENCE_FINAL_VALUE,
+                }),
+                Box::new(AInit {
+                    a_col: a,
+                    init_ctrl_col: init,
+                    init_value: FIBONACCI_SEQUENCE_INIT_VALUE_A,
+                }),
+                Box::new(BInit {
+                    b_col: b,
+                    init_ctrl_col: init,
+                    init_value: FIBONACCI_SEQUENCE_INIT_VALUE_B,
+                }),
+                // booleanity constraints (recommended)
+                Box::new(Booleanity { col: tr }),
+                Box::new(Booleanity { col: init }),
+                Box::new(Booleanity { col: term }),
+            ],
         }
     }
 
@@ -235,20 +376,7 @@ mod tests {
             },
         };
 
-        let constraints: Vec<ConstraintFunction<Fr>> = vec![
-            time_step_boundary_constraint::<Fr>,
-            time_step_transition_constraint::<Fr>,
-            column_a_transition_constraint::<Fr>,
-            column_b_transition_constraint::<Fr>,
-            termination_value_constraint::<Fr>,
-            column_a_init_constraint::<Fr>,
-            column_b_init_constraint::<Fr>,
-        ];
-        let air = FibAir {
-            width: trace.num_cols(),
-            constraints,
-        };
-
+        let air = make_padded_fib_air();
         let tx_label = b"transcript";
         let tx_seed = b"padded_fib_zkvm";
         let mut tx = Transcript::new(tx_label, tx_seed);
