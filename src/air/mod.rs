@@ -1,7 +1,7 @@
 use ark_ff::PrimeField;
 
-pub mod air;
 pub mod trace;
+pub use trace::TraceTable;
 
 pub trait RowAccess<F: PrimeField> {
     fn current_step_column_value(&self, column: usize) -> F;
