@@ -1,7 +1,28 @@
 use ark_ff::PrimeField;
 
+use crate::air::{Air, ConstraintFunction, RowAccess};
+
 mod fib_basic;
 mod fib_padded;
+
+struct FibAir<F: PrimeField> {
+    width: usize,
+    constraints: Vec<ConstraintFunction<F>>,
+}
+
+impl<F: PrimeField> Air<F> for FibAir<F> {
+    fn width(&self) -> usize {
+        self.width
+    }
+
+    fn num_constraints(&self) -> usize {
+        self.constraints.len()
+    }
+
+    fn eval_constraint(&self, i: usize, row: &dyn RowAccess<F>) -> F {
+        (self.constraints[i])(row)
+    }
+}
 
 fn calculate_fibonacci_seq<F: PrimeField>(n: usize) -> Vec<F> {
     match n {

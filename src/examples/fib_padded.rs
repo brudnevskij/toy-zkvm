@@ -104,10 +104,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        air::{ConstraintFunction, TraceTable, air::ZkvmPublicParameters, zkvm_prove, zkvm_verify},
+        air::{ConstraintFunction, TraceTable},
         backend::{FriOptions, Transcript},
-        examples::calculate_fibonacci_seq,
+        examples::{FibAir, calculate_fibonacci_seq},
         test_utils::{pick_coset_shift, pick_domain},
+        zkvm::{ZkvmPublicParameters, prove, verify},
     };
     use ark_bn254::Fr;
     use ark_ff::{One, Zero};
@@ -243,14 +244,17 @@ mod tests {
             column_a_init_constraint::<Fr>,
             column_b_init_constraint::<Fr>,
         ];
+        let air = FibAir {
+            width: trace.num_cols(),
+            constraints,
+        };
 
         let tx_label = b"transcript";
         let tx_seed = b"padded_fib_zkvm";
         let mut tx = Transcript::new(tx_label, tx_seed);
-        let proof =
-            zkvm_prove(&trace, &mut tx, &constraints, &public_params).expect("should succeed");
+        let proof = prove(&trace, &air, &mut tx, &public_params).expect("should succeed");
 
         let mut tx = Transcript::new(tx_label, tx_seed);
-        zkvm_verify(&proof, &mut tx, &constraints, &public_params).expect("should succeed");
+        verify(&proof, &air, &mut tx, &public_params).expect("should succeed");
     }
 }

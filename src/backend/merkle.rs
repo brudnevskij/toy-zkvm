@@ -56,7 +56,7 @@ impl<H: Hasher> MerkleTree<H> {
             return Err(MerkleError::Empty);
         }
         let leaves: Vec<Digest> = rows.iter().map(|x| H::hash_leaf(x)).collect();
-        Ok(Self::from_leaf_digests(&leaves)?)
+        Self::from_leaf_digests(&leaves)
     }
 
     pub fn from_leaf_digests(leaves: &[Digest]) -> Result<Self, MerkleError> {

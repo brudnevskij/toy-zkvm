@@ -1,6 +1,6 @@
 use ark_ff::PrimeField;
 
-use crate::air::RowAccess;
+use crate::air::{Air, ConstraintFunction, RowAccess};
 use FibonacciColumns::{SequenceValuesA, SequenceValuesB, TimeStep};
 
 enum FibonacciColumns {
@@ -54,20 +54,15 @@ fn final_value_boundary<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
     num * denom.inverse().unwrap()
 }
 
-// optional: implement first boundary values
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        air::{
-            ConstraintFunction, TraceTable,
-            air::{ZkvmProveError, ZkvmPublicParameters},
-            zkvm_prove, zkvm_verify,
-        },
+        air::{ConstraintFunction, TraceTable},
         backend::{FriOptions, FriProofError, Transcript},
-        examples::calculate_fibonacci_seq,
+        examples::{FibAir, calculate_fibonacci_seq},
         test_utils::{pick_coset_shift, pick_domain},
+        zkvm::{ZkvmProveError, ZkvmPublicParameters, prove, verify},
     };
     use ark_bn254::Fr;
     use ark_ff::Zero;
@@ -120,12 +115,16 @@ mod tests {
             final_value_boundary::<Fr>,
         ];
 
-        let proof = zkvm_prove(&trace_table, &mut tx, &constraints, &public_params)
-            .expect("prove should succeed");
+        let air = FibAir {
+            width: trace_table.num_cols(),
+            constraints,
+        };
+
+        let proof =
+            prove(&trace_table, &air, &mut tx, &public_params).expect("prove should succeed");
 
         let mut tx = Transcript::new(b"transcript", seed);
-        zkvm_verify(&proof, &mut tx, &constraints, &public_params)
-            .expect("verification should succeed");
+        verify(&proof, &air, &mut tx, &public_params).expect("verification should succeed");
     }
 
     #[test]
@@ -180,7 +179,12 @@ mod tests {
             final_value_boundary::<Fr>,
         ];
 
-        let res = zkvm_prove(&trace_table, &mut tx, &constraints, &public_params);
+        let air = FibAir {
+            width: trace_table.num_cols(),
+            constraints,
+        };
+
+        let res = prove(&trace_table, &air, &mut tx, &public_params);
         assert!(matches!(
             res,
             Err(ZkvmProveError::Fri(

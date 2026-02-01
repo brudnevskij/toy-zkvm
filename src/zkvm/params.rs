@@ -1,6 +1,6 @@
 use crate::backend::{FriOptions, Transcript};
 use ark_ff::PrimeField;
-use ark_poly::Radix2EvaluationDomain;
+use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
 
 pub struct TranscriptLabels;
 
@@ -37,7 +37,7 @@ pub struct ZkvmPublicParameters<F: PrimeField> {
 }
 
 impl<F: PrimeField> ZkvmPublicParameters<F> {
-    pub(crate) fn seed_tx(&self, tx: &mut Transcript) {
+    pub fn seed_tx(&self, tx: &mut Transcript) {
         tx.absorb_bytes(
             TranscriptLabels::TRACE_DOMAIN_SIZE,
             &self.trace_domain.size().to_le_bytes(),
