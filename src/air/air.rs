@@ -27,7 +27,7 @@ impl<F: Field> TraceTable<F> {
             "names mismatch"
         );
         for (i, column) in columns.iter().enumerate() {
-            let name = if names.is_empty() {
+            let name = if !names.is_empty() {
                 &names[i]
             } else {
                 &format!("c_{}", i)
