@@ -123,3 +123,165 @@ impl<'a> Lexer<'a> {
         Ok(token_stream)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lex_ok(src: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(src);
+        lexer.lex().expect("lexer should succeed")
+    }
+
+    #[test]
+    fn lex_single_halt() {
+        let tokens = lex_ok("halt");
+
+        assert_eq!(tokens, vec![Token::Keyword(Keyword::Halt), Token::Eof,]);
+    }
+
+    #[test]
+    fn lex_basic_instruction_with_whitespace() {
+        let tokens = lex_ok("const r0, 8\n");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Const),
+                Token::Identifier("r0".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Number(8),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_label_and_jump() {
+        let tokens = lex_ok("loop:\njmp loop\n");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("loop".to_string()),
+                Token::Punctuation(":".to_string()),
+                Token::Newline,
+                Token::Keyword(Keyword::Jmp),
+                Token::Identifier("loop".to_string()),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_jnz_line() {
+        let tokens = lex_ok("jnz r0, loop\n");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Jnz),
+                Token::Identifier("r0".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Identifier("loop".to_string()),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_ignores_spaces_tabs_and_carriage_return() {
+        let tokens = lex_ok(" \tconst\t r1,\r 42 \n");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Const),
+                Token::Identifier("r1".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Number(42),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_comment_only_line() {
+        let tokens = lex_ok("# this is a comment\nhalt");
+
+        assert_eq!(
+            tokens,
+            vec![Token::Newline, Token::Keyword(Keyword::Halt), Token::Eof,]
+        );
+    }
+
+    #[test]
+    fn lex_inline_comment_preserves_newline() {
+        let tokens = lex_ok("const r0, 1 # comment here\nhalt\n");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Const),
+                Token::Identifier("r0".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Number(1),
+                Token::Newline,
+                Token::Keyword(Keyword::Halt),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_multiple_lines_program() {
+        let src = "\
+const r0, 3
+const r1, 0
+add r1, r0
+halt
+";
+        let tokens = lex_ok(src);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Keyword(Keyword::Const),
+                Token::Identifier("r0".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Number(3),
+                Token::Newline,
+                Token::Keyword(Keyword::Const),
+                Token::Identifier("r1".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Number(0),
+                Token::Newline,
+                Token::Keyword(Keyword::Add),
+                Token::Identifier("r1".to_string()),
+                Token::Punctuation(",".to_string()),
+                Token::Identifier("r0".to_string()),
+                Token::Newline,
+                Token::Keyword(Keyword::Halt),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_unknown_character_returns_error() {
+        let mut lexer = Lexer::new("@");
+        let err = lexer.lex().expect_err("lexer should fail on unknown char");
+
+        match err {
+            // If you rename the variant to UnknownCharacter, update this match arm.
+            LexError::UnknownCharacter('@') => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
