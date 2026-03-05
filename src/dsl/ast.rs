@@ -1,10 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Reg {
-    R0,
-    R1,
-    R2,
-    R3,
-}
+use crate::vm::Reg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedInstr {

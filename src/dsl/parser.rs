@@ -1,4 +1,7 @@
-use crate::dsl::{Keyword, ParsedInstr, Reg, Statement, Token};
+use crate::{
+    dsl::{Keyword, ParsedInstr, Statement, Token},
+    vm::Reg,
+};
 
 fn register_of(name: &str) -> Result<Reg, ParseError> {
     match name {
