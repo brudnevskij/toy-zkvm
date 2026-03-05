@@ -1,12 +1,4 @@
-use crate::dsl::{Keyword, Token};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Reg {
-    R0,
-    R1,
-    R2,
-    R3,
-}
+use crate::dsl::{Keyword, ParsedInstr, Reg, Statement, Token};
 
 fn register_of(name: &str) -> Result<Reg, ParseError> {
     match name {
@@ -23,23 +15,6 @@ fn parse_register(token: &Token) -> Result<Reg, ParseError> {
         Token::Identifier(name) => register_of(name),
         t => Err(ParseError::InvalidRegister(format!("{:?}", t))),
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParsedInstr {
-    Const(Reg, i64),
-    Mov(Reg, Reg),
-    Add(Reg, Reg),
-    Sub(Reg, Reg),
-    Jmp(String),
-    Jnz(Reg, String),
-    Halt,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Statement {
-    Label(String),
-    Instr(ParsedInstr),
 }
 
 #[derive(thiserror::Error, Debug)]
