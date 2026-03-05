@@ -236,3 +236,210 @@ impl Parser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::Lexer;
+
+    fn parse_ok(src: &str) -> Vec<Statement> {
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.lex().expect("lexer should succeed");
+
+        let mut parser = Parser::new(tokens);
+        parser.parse().expect("parser should succeed")
+    }
+
+    fn parse_err(src: &str) -> ParseError {
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.lex().expect("lexer should succeed");
+
+        let mut parser = Parser::new(tokens);
+        parser.parse().expect_err("parser should fail")
+    }
+
+    #[test]
+    fn parse_halt_only() {
+        let program = parse_ok("halt\n");
+
+        assert_eq!(program, vec![Statement::Instr(ParsedInstr::Halt)]);
+    }
+
+    #[test]
+    fn parse_const_instruction() {
+        let program = parse_ok("const r0, 8\n");
+
+        assert_eq!(
+            program,
+            vec![Statement::Instr(ParsedInstr::Const(Reg::R0, 8))]
+        );
+    }
+
+    #[test]
+    fn parse_mov_add_sub_instructions() {
+        let src = "
+mov r0, r1
+add r2, r3
+sub r1, r0
+";
+        let program = parse_ok(src);
+
+        assert_eq!(
+            program,
+            vec![
+                Statement::Instr(ParsedInstr::Mov(Reg::R0, Reg::R1)),
+                Statement::Instr(ParsedInstr::Add(Reg::R2, Reg::R3)),
+                Statement::Instr(ParsedInstr::Sub(Reg::R1, Reg::R0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_jmp_and_jnz() {
+        let src = "
+jmp loop
+jnz r0, loop
+";
+        let program = parse_ok(src);
+
+        assert_eq!(
+            program,
+            vec![
+                Statement::Instr(ParsedInstr::Jmp("loop".to_string())),
+                Statement::Instr(ParsedInstr::Jnz(Reg::R0, "loop".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_label_only_line() {
+        let program = parse_ok("loop:\n");
+
+        assert_eq!(program, vec![Statement::Label("loop".to_string())]);
+    }
+
+    #[test]
+    fn parse_label_and_instruction_sequence() {
+        let src = "
+loop:
+add r1, r0
+jnz r0, loop
+halt
+";
+        let program = parse_ok(src);
+
+        assert_eq!(
+            program,
+            vec![
+                Statement::Label("loop".to_string()),
+                Statement::Instr(ParsedInstr::Add(Reg::R1, Reg::R0)),
+                Statement::Instr(ParsedInstr::Jnz(Reg::R0, "loop".to_string())),
+                Statement::Instr(ParsedInstr::Halt),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_ignores_empty_lines() {
+        let src = "\n\nhalt\n\n";
+        let program = parse_ok(src);
+
+        assert_eq!(program, vec![Statement::Instr(ParsedInstr::Halt)]);
+    }
+
+    #[test]
+    fn parse_with_comments_via_lexer() {
+        let src = "
+# start
+const r0, 3   # initialize
+loop:
+sub r0, r1
+jnz r0, loop
+halt
+";
+        let program = parse_ok(src);
+
+        assert_eq!(
+            program,
+            vec![
+                Statement::Instr(ParsedInstr::Const(Reg::R0, 3)),
+                Statement::Label("loop".to_string()),
+                Statement::Instr(ParsedInstr::Sub(Reg::R0, Reg::R1)),
+                Statement::Instr(ParsedInstr::Jnz(Reg::R0, "loop".to_string())),
+                Statement::Instr(ParsedInstr::Halt),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_invalid_register_in_const() {
+        let err = parse_err("const r9, 1\n");
+
+        match err {
+            ParseError::InvalidRegister(name) => assert_eq!(name, "r9"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_missing_comma_in_const() {
+        let err = parse_err("const r0 1\n");
+
+        match err {
+            ParseError::UnexpectedToken { expected, found } => {
+                assert_eq!(expected, ",");
+                assert_eq!(found, Token::Number(1));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_missing_colon_after_label() {
+        let err = parse_err("loop\n");
+
+        match err {
+            ParseError::UnexpectedToken { expected, .. } => {
+                assert_eq!(expected, ":");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_jmp_requires_identifier_label() {
+        let err = parse_err("jmp 123\n");
+
+        match err {
+            ParseError::UnexpectedToken { expected, found } => {
+                assert_eq!(expected, "identifier");
+                assert_eq!(found, Token::Number(123));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_jnz_requires_register_then_label() {
+        let err = parse_err("jnz foo, loop\n");
+
+        match err {
+            ParseError::InvalidRegister(name) => assert_eq!(name, "foo"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_unexpected_token_at_statement_start() {
+        // A line starting with a comma is not a valid statement.
+        let err = parse_err(",\n");
+
+        match err {
+            ParseError::UnexpectedToken { expected, found } => {
+                assert_eq!(expected, "keyword or label");
+                assert_eq!(found, Token::Punctuation(",".to_string()));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
