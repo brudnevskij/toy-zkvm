@@ -1,5 +1,3 @@
-use std::{fmt::format, i64};
-
 use crate::dsl::{Keyword, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,9 +99,37 @@ impl Parser {
         }
     }
 
+    fn parse_column(&mut self) -> Result<(), ParseError> {
+        match self.advance() {
+            Some(Token::Punctuation(p)) if p == ":" => Ok(()),
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: ":",
+                found: t.clone(),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
     fn parse_register(&mut self) -> Result<Reg, ParseError> {
         match self.advance() {
             Some(token) => parse_register(token),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+    fn parse_reg_reg_operands(&mut self) -> Result<(Reg, Reg), ParseError> {
+        let lhs = self.parse_register()?;
+        self.parse_comma()?;
+        let rhs = self.parse_register()?;
+        Ok((lhs, rhs))
+    }
+
+    fn parse_identifier(&mut self) -> Result<String, ParseError> {
+        match self.advance() {
+            Some(Token::Identifier(name)) => Ok(name.clone()),
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: "identifier",
+                found: t.clone(),
+            }),
             None => Err(ParseError::UnexpectedEof),
         }
     }
@@ -117,7 +143,7 @@ impl Parser {
 
                     let register = self.parse_register()?;
 
-                    self.parse_coma()?;
+                    self.parse_comma()?;
 
                     let constant: i64 = match self.advance() {
                         Some(Token::Number(n)) => *n,
@@ -134,27 +160,66 @@ impl Parser {
                         register, constant,
                     ))))
                 }
+
                 Keyword::Mov => {
-                    // consume Mov
                     self.advance();
-
-                    let register_l = self.parse_register()?;
-
-                    self.parse_coma()?;
-
-                    let register_r = self.parse_register()?;
-
+                    let (register_l, register_r) = self.parse_reg_reg_operands()?;
                     Ok(Some(Statement::Instr(ParsedInstr::Mov(
                         register_l, register_r,
                     ))))
                 }
-                Keyword::Add => todo!(),
-                Keyword::Sub => todo!(),
-                Keyword::Jmp => todo!(),
-                Keyword::Jnz => todo!(),
-                Keyword::Halt => todo!(),
+                Keyword::Add => {
+                    self.advance();
+                    let (register_l, register_r) = self.parse_reg_reg_operands()?;
+                    Ok(Some(Statement::Instr(ParsedInstr::Add(
+                        register_l, register_r,
+                    ))))
+                }
+                Keyword::Sub => {
+                    self.advance();
+                    let (register_l, register_r) = self.parse_reg_reg_operands()?;
+                    Ok(Some(Statement::Instr(ParsedInstr::Sub(
+                        register_l, register_r,
+                    ))))
+                }
+
+                Keyword::Jmp => {
+                    self.advance();
+                    let identifier = self.parse_identifier()?;
+                    Ok(Some(Statement::Instr(ParsedInstr::Jmp(identifier))))
+                }
+                Keyword::Jnz => {
+                    self.advance();
+
+                    let register = self.parse_register()?;
+                    self.parse_comma()?;
+                    let identifier = self.parse_identifier()?;
+
+                    Ok(Some(Statement::Instr(ParsedInstr::Jnz(
+                        register, identifier,
+                    ))))
+                }
+                Keyword::Halt => {
+                    self.advance();
+                    Ok(Some(Statement::Instr(ParsedInstr::Halt)))
+                }
             },
-            _ => Ok(None),
+            Some(Token::Identifier(identifier)) => {
+                let identifier = identifier.clone();
+                self.advance();
+                self.parse_column()?;
+                Ok(Some(Statement::Label(identifier)))
+            }
+
+            Some(Token::Newline) => Ok(None),
+            Some(Token::Eof) => Ok(None),
+
+            Some(token) => Err(ParseError::UnexpectedToken {
+                expected: "keyword or label",
+                found: token.clone(),
+            }),
+
+            None => Err(ParseError::UnexpectedEof),
         }
     }
 }
