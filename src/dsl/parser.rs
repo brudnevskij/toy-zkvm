@@ -83,8 +83,21 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Vec<Statement>, ParseError> {
-        let program = Vec::new();
-
+        let mut program = Vec::new();
+        loop {
+            match self.peek() {
+                Some(Token::Newline) => {
+                    self.advance();
+                }
+                Some(Token::Eof) => break,
+                Some(token) => {
+                    if let Some(stmnt) = self.parse_statement()? {
+                        program.push(stmnt);
+                    }
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
         Ok(program)
     }
 
