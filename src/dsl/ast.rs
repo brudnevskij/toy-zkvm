@@ -2,7 +2,7 @@ use crate::vm::Reg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedInstr {
-    Const(Reg, i64),
+    Const(Reg, u64),
     Mov(Reg, Reg),
     Add(Reg, Reg),
     Sub(Reg, Reg),

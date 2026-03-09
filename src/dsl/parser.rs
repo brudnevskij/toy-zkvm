@@ -68,7 +68,7 @@ impl Parser {
                     self.advance();
                 }
                 Some(Token::Eof) => break,
-                Some(token) => {
+                Some(_) => {
                     if let Some(stmnt) = self.parse_statement()? {
                         program.push(stmnt);
                     }
@@ -136,7 +136,7 @@ impl Parser {
 
                     self.parse_comma()?;
 
-                    let constant: i64 = match self.advance() {
+                    let constant: u64 = match self.advance() {
                         Some(Token::Number(n)) => *n,
                         Some(t) => {
                             return Err(ParseError::UnexpectedToken {

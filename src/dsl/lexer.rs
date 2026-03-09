@@ -8,7 +8,7 @@ pub enum Token {
     Punctuation(String),
     Keyword(Keyword),
     Identifier(String),
-    Number(i64),
+    Number(u64),
     Newline,
     Eof,
 }
@@ -94,7 +94,7 @@ impl<'a> Lexer<'a> {
                         if let Some(keyword) = keyword_of(&word) {
                             token_stream.push(Token::Keyword(keyword));
                         } else {
-                            let token = match word.parse::<i64>() {
+                            let token = match word.parse::<u64>() {
                                 Ok(number) => Token::Number(number),
                                 Err(_) => Token::Identifier(word),
                             };

@@ -21,7 +21,7 @@ pub type Pc = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
-    Const { dst: Reg, imm: i64 },
+    Const { dst: Reg, imm: u64 },
     Mov { dst: Reg, src: Reg },
     Add { dst: Reg, src: Reg },
     Sub { dst: Reg, src: Reg },
