@@ -1,7 +1,10 @@
+use core::error;
+use std::usize;
+
 use ark_ff::PrimeField;
 use thiserror::Error;
 
-use crate::vm::{Instruction, Pc, Program};
+use crate::vm::{ExecutionRow, Instruction, Pc, Program, decode_row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmState<F: PrimeField> {
@@ -14,6 +17,9 @@ pub struct VmState<F: PrimeField> {
 pub enum VmError {
     #[error("pc is out of bounds, pc: {pc} program length: {program_len}")]
     PcOutOfBounds { pc: usize, program_len: usize },
+
+    #[error("execution did not halt before trace filled, trace_len: {trace_len}")]
+    StepLimitExceeded { trace_len: usize },
 }
 
 pub fn step<F: PrimeField>(state: &VmState<F>, program: &Program) -> Result<VmState<F>, VmError> {
@@ -95,6 +101,50 @@ pub fn step<F: PrimeField>(state: &VmState<F>, program: &Program) -> Result<VmSt
             halted: true,
         }),
     }
+}
+
+pub fn run_rows<F: PrimeField>(
+    initial_state: VmState<F>,
+    program: &Program,
+    trace_len: usize,
+    max_steps: usize,
+) -> Result<Vec<ExecutionRow<F>>, VmError> {
+    assert!(
+        trace_len.is_power_of_two(),
+        "trace length must be power of two"
+    );
+    let mut execution_rows = Vec::with_capacity(trace_len);
+
+    let mut steps = 0usize;
+    let mut state = initial_state;
+    while execution_rows.len() < trace_len {
+        if state.halted {
+            let row = decode_row(&state, &Instruction::Halt);
+            execution_rows.push(row);
+            continue;
+        }
+
+        if steps >= max_steps {
+            return Err(VmError::StepLimitExceeded {
+                trace_len: max_steps,
+            });
+        }
+
+        let instr = program
+            .instructions
+            .get(state.pc)
+            .ok_or(VmError::PcOutOfBounds {
+                pc: state.pc,
+                program_len: program.instructions.len(),
+            })?;
+
+        execution_rows.push(decode_row(&state, instr));
+
+        state = step(&state, program)?;
+        steps += 1;
+    }
+
+    Ok(execution_rows)
 }
 
 #[cfg(test)]
@@ -223,7 +273,7 @@ mod tests {
         let st1 = step(&st0, &program).expect("step should succeed");
 
         assert_eq!(st1.pc, 7);
-        assert!(st1.halted);
+        assert!(!st1.halted);
     }
 
     #[test]
