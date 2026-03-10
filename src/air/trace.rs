@@ -6,7 +6,7 @@ use ark_ff::Field;
 pub struct TraceTable<F: Field> {
     n: usize,
     pub columns: Vec<Vec<F>>,
-    names: Vec<String>,
+    pub names: Vec<String>,
 }
 
 impl<F: Field> TraceTable<F> {
@@ -14,6 +14,7 @@ impl<F: Field> TraceTable<F> {
         assert!(!columns.is_empty(), "columns must have at least one column");
         let n = columns[0].len();
         assert!(n > 0, "number of columns must be greater than zero");
+        assert!(n.is_power_of_two(), "trace len must be power of 2");
         assert!(
             names.is_empty() || names.len() == columns.len(),
             "names mismatch"
