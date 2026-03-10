@@ -2,6 +2,6 @@ mod exec;
 mod instructions;
 mod trace;
 
-pub use exec::{VmError, VmState, step};
+pub use exec::{VmError, VmState, run_rows, step};
 pub use instructions::{Instruction, Pc, Program, Reg};
-pub use trace::{ExecutionRow, decode_row};
+pub use trace::{ExecutionRow, decode_row, rows_to_trace_table};
