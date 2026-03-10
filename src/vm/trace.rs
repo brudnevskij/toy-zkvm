@@ -2,6 +2,7 @@ use ark_ff::PrimeField;
 
 use crate::vm::{Instruction, Reg, VmState};
 
+#[derive(Debug, Clone)]
 pub struct ExecutionRow<F: PrimeField> {
     pub pc: F,
     pub regs: [F; 4],

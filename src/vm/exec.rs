@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use crate::vm::{Instruction, Program, Reg};
     use ark_bn254::Fr;
-    use ark_ff::{PrimeField, Zero};
+    use ark_ff::{One, PrimeField, Zero};
 
     fn fe_u64<F: PrimeField>(x: u64) -> F {
         F::from_le_bytes_mod_order(&x.to_le_bytes())
@@ -164,6 +164,20 @@ mod tests {
             regs: [r0, r1, r2, r3],
             halted,
         }
+    }
+
+    fn init_state<F: PrimeField>() -> VmState<F> {
+        VmState {
+            pc: 0,
+            regs: [F::zero(); 4],
+            halted: false,
+        }
+    }
+
+    fn state_with_r0<F: PrimeField>(r0: u64) -> VmState<F> {
+        let mut s = init_state::<F>();
+        s.regs[Reg::R0.idx()] = fe_u64::<F>(r0);
+        s
     }
 
     #[test]
@@ -365,5 +379,140 @@ mod tests {
                 program_len: 0
             }
         );
+    }
+
+    #[test]
+    fn run_rows_returns_exact_trace_len() {
+        let program = Program {
+            instructions: vec![Instruction::Halt],
+        };
+
+        let rows = run_rows::<Fr>(init_state(), &program, 8, 100).expect("run should succeed");
+        assert_eq!(rows.len(), 8);
+    }
+
+    #[test]
+    fn row0_is_pre_state() {
+        // Program: const r0, 7; halt
+        let program = Program {
+            instructions: vec![
+                Instruction::Const {
+                    dst: Reg::R0,
+                    imm: 7,
+                },
+                Instruction::Halt,
+            ],
+        };
+
+        let rows = run_rows::<Fr>(init_state(), &program, 8, 100).expect("run should succeed");
+
+        // Row 0 is pre-state: r0 should still be 0
+        assert_eq!(rows[0].regs[Reg::R0.idx()], Fr::zero());
+        // And selector should be const
+        assert_eq!(rows[0].s_const, Fr::one());
+        assert_eq!(rows[0].s_halt, Fr::zero());
+
+        // Row 1 is pre-state for halt, so r0 should be 7 there
+        assert_eq!(rows[1].regs[Reg::R0.idx()], fe_u64::<Fr>(7));
+        assert_eq!(rows[1].s_halt, Fr::one());
+    }
+
+    #[test]
+    fn halting_pads_with_halt_rows() {
+        // Program halts immediately
+        let program = Program {
+            instructions: vec![Instruction::Halt],
+        };
+
+        let rows = run_rows::<Fr>(init_state(), &program, 8, 100).expect("run should succeed");
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.s_halt, Fr::one(), "row {i} should be halt");
+            if i == 0 {
+                assert_eq!(row.halted, Fr::zero());
+            } else {
+                assert_eq!(row.halted, Fr::one());
+            }
+        }
+    }
+
+    #[test]
+    fn executes_simple_program_then_pads() {
+        // const r0, 5
+        // const r1, 2
+        // add r0, r1
+        // halt
+        let program = Program {
+            instructions: vec![
+                Instruction::Const {
+                    dst: Reg::R0,
+                    imm: 5,
+                },
+                Instruction::Const {
+                    dst: Reg::R1,
+                    imm: 2,
+                },
+                Instruction::Add {
+                    dst: Reg::R0,
+                    src: Reg::R1,
+                },
+                Instruction::Halt,
+            ],
+        };
+
+        let rows = run_rows::<Fr>(init_state(), &program, 8, 100).expect("run should succeed");
+
+        // Pre-state checks:
+        // Row 0 (before const r0,5): r0=0
+        assert_eq!(rows[0].regs[Reg::R0.idx()], Fr::zero());
+        assert_eq!(rows[0].s_const, Fr::one());
+
+        // Row 1 (before const r1,2): r0=5, r1=0
+        assert_eq!(rows[1].regs[Reg::R0.idx()], fe_u64::<Fr>(5));
+        assert_eq!(rows[1].regs[Reg::R1.idx()], Fr::zero());
+
+        // Row 2 (before add): r0=5, r1=2
+        assert_eq!(rows[2].regs[Reg::R0.idx()], fe_u64::<Fr>(5));
+        assert_eq!(rows[2].regs[Reg::R1.idx()], fe_u64::<Fr>(2));
+        assert_eq!(rows[2].s_add, Fr::one());
+
+        // Row 3 (before halt): r0=7
+        assert_eq!(rows[3].regs[Reg::R0.idx()], fe_u64::<Fr>(7));
+        assert_eq!(rows[3].s_halt, Fr::one());
+
+        // Rows 4.. are padding halts and must keep r0=7
+        for i in 4..8 {
+            assert_eq!(rows[i].s_halt, Fr::one());
+            assert_eq!(rows[i].regs[Reg::R0.idx()], fe_u64::<Fr>(7));
+        }
+    }
+
+    #[test]
+    fn step_limit_exceeded_errors() {
+        // Infinite loop: jmp 0
+        let program = Program {
+            instructions: vec![Instruction::Jmp { target: 0 }],
+        };
+
+        let err = run_rows::<Fr>(init_state(), &program, 8, 3).expect_err("should error");
+        assert_eq!(err, VmError::StepLimitExceeded { trace_len: 3 });
+    }
+
+    #[test]
+    fn pc_out_of_bounds_errors() {
+        // Jump to invalid pc
+        let program = Program {
+            instructions: vec![Instruction::Jmp { target: 999 }],
+        };
+
+        // trace_len=8 so it will try to execute and then fail on next fetch
+        let err = run_rows::<Fr>(init_state(), &program, 8, 100).expect_err("should error");
+
+        match err {
+            VmError::PcOutOfBounds { pc, program_len } => {
+                assert_eq!(pc, 999);
+                assert_eq!(program_len, 1);
+            }
+            other => panic!("expected PcOutOfBounds, got {other:?}"),
+        }
     }
 }
