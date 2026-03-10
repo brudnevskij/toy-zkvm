@@ -6,7 +6,7 @@ use crate::{
 };
 use std::collections::HashMap;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     #[error("jumping to non-existent label: {expected_label}")]
     MissingLabel { expected_label: String },

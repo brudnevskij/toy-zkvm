@@ -37,7 +37,7 @@ fn keyword_of(s: &str) -> Option<Keyword> {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum LexError {
     #[error("unknown character {0}")]
     UnknownCharacter(char),

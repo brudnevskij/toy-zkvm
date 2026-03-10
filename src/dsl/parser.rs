@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 use crate::{
     dsl::{Keyword, ParsedInstr, Statement, Token},
     vm::Reg,
@@ -20,7 +22,7 @@ fn parse_register(token: &Token) -> Result<Reg, ParseError> {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     #[error("unexpected token: expected {expected}, found {found:?}")]
     UnexpectedToken {
