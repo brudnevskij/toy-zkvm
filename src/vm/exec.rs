@@ -1,6 +1,3 @@
-use core::error;
-use std::usize;
-
 use ark_ff::PrimeField;
 use thiserror::Error;
 
@@ -172,12 +169,6 @@ mod tests {
             regs: [F::zero(); 4],
             halted: false,
         }
-    }
-
-    fn state_with_r0<F: PrimeField>(r0: u64) -> VmState<F> {
-        let mut s = init_state::<F>();
-        s.regs[Reg::R0.idx()] = fe_u64::<F>(r0);
-        s
     }
 
     #[test]
