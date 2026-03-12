@@ -49,8 +49,8 @@ struct TimeStepBoundary {
 }
 
 impl<F: PrimeField> Constraint<F> for TimeStepBoundary {
-    fn name(&self) -> &'static str {
-        "time_step_boundary"
+    fn name(&self) -> String {
+        "time_step_boundary".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -65,8 +65,8 @@ struct TimeStepTransition {
 }
 
 impl<F: PrimeField> Constraint<F> for TimeStepTransition {
-    fn name(&self) -> &'static str {
-        "time_step_transition"
+    fn name(&self) -> String {
+        "time_step_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -84,8 +84,8 @@ struct ATransition {
 }
 
 impl<F: PrimeField> Constraint<F> for ATransition {
-    fn name(&self) -> &'static str {
-        "a_transition"
+    fn name(&self) -> String {
+        "a_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -103,8 +103,8 @@ struct BTransition {
 }
 
 impl<F: PrimeField> Constraint<F> for BTransition {
-    fn name(&self) -> &'static str {
-        "b_transition"
+    fn name(&self) -> String {
+        "b_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -123,8 +123,8 @@ struct TerminationValue {
 }
 
 impl<F: PrimeField> Constraint<F> for TerminationValue {
-    fn name(&self) -> &'static str {
-        "termination_value"
+    fn name(&self) -> String {
+        "termination_value".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -141,8 +141,8 @@ struct AInit {
 }
 
 impl<F: PrimeField> Constraint<F> for AInit {
-    fn name(&self) -> &'static str {
-        "a_init"
+    fn name(&self) -> String {
+        "a_init".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -159,8 +159,8 @@ struct BInit {
 }
 
 impl<F: PrimeField> Constraint<F> for BInit {
-    fn name(&self) -> &'static str {
-        "b_init"
+    fn name(&self) -> String {
+        "b_init".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -178,8 +178,8 @@ struct Booleanity {
 }
 
 impl<F: PrimeField> Constraint<F> for Booleanity {
-    fn name(&self) -> &'static str {
-        "booleanity"
+    fn name(&self) -> String {
+        "booleanity".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -357,6 +357,7 @@ mod tests {
 
         let trace = TraceTable::new(columns, names);
 
+        println!("{}", trace);
         // Public Params
         let blowup = 16;
         let lde_size = trace_size * blowup;

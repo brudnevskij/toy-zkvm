@@ -29,8 +29,8 @@ struct TimeStepBoundary {
 }
 
 impl<F: PrimeField> Constraint<F> for TimeStepBoundary {
-    fn name(&self) -> &'static str {
-        "time_step_boundary"
+    fn name(&self) -> String {
+        "time_step_boundary".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -45,8 +45,8 @@ struct TimeStepTransition {
 }
 
 impl<F: PrimeField> Constraint<F> for TimeStepTransition {
-    fn name(&self) -> &'static str {
-        "time_step_transition"
+    fn name(&self) -> String {
+        "time_step_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -62,8 +62,8 @@ struct ATransition {
 }
 
 impl<F: PrimeField> Constraint<F> for ATransition {
-    fn name(&self) -> &'static str {
-        "a_transition"
+    fn name(&self) -> String {
+        "a_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -79,8 +79,8 @@ struct BTransition {
 }
 
 impl<F: PrimeField> Constraint<F> for BTransition {
-    fn name(&self) -> &'static str {
-        "b_transition"
+    fn name(&self) -> String {
+        "b_transition".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -97,8 +97,8 @@ struct FinalValueBoundary {
 }
 
 impl<F: PrimeField> Constraint<F> for FinalValueBoundary {
-    fn name(&self) -> &'static str {
-        "final_value_boundary"
+    fn name(&self) -> String {
+        "final_value_boundary".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -112,7 +112,7 @@ impl<F: PrimeField> Constraint<F> for FinalValueBoundary {
 mod tests {
     use super::*;
     use crate::{
-        air::{Constraint, TraceTable},
+        air::TraceTable,
         backend::{FriOptions, FriProofError, Transcript},
         examples::{FibAir, calculate_fibonacci_seq},
         test_utils::{pick_coset_shift, pick_domain},

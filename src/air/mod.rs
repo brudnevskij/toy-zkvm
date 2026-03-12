@@ -14,7 +14,7 @@ pub trait RowAccess<F: PrimeField> {
 }
 
 pub trait Constraint<F: PrimeField>: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> String;
     fn eval(&self, row: &dyn RowAccess<F>) -> F;
 }
 
