@@ -22,16 +22,16 @@ pub trait Constraint<F: PrimeField>: Send + Sync {
 pub trait Air<F: PrimeField> {
     fn width(&self) -> usize;
 
-    fn column_name(&self, _col: usize) -> &'static str {
-        "col"
+    fn column_name(&self, _col: usize) -> String {
+        "col".to_string()
     }
 
     fn num_constraints(&self) -> usize;
 
     fn eval_constraint(&self, i: usize, row: &dyn RowAccess<F>) -> F;
 
-    fn constraint_name(&self, _i: usize) -> &'static str {
-        "constraint"
+    fn constraint_name(&self, _i: usize) -> String {
+        "constraint".to_string()
     }
 }
 
