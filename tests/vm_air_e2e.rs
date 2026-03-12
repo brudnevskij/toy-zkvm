@@ -3,24 +3,12 @@ use ark_ff::{One, PrimeField, Zero};
 use toy_zkvm::{
     air::{Air, RowAccess, TraceTable},
     dsl::compile,
+    test_utils::run_program_to_trace,
     vm::{TraceColumn, VmAir, VmState, rows_to_trace_table, run_rows},
 };
 
 fn fr(x: u64) -> Fr {
     Fr::from(x)
-}
-
-fn run_program_to_trace(source: &str, trace_len: usize, max_steps: usize) -> TraceTable<Fr> {
-    let program = compile(source).expect("program should compile");
-    let initial_state = VmState {
-        pc: 0,
-        regs: [Fr::zero(); 4],
-        halted: false,
-    };
-
-    let rows = run_rows(initial_state, &program, trace_len, max_steps).expect("program should run");
-
-    rows_to_trace_table(&rows)
 }
 
 struct TestRow<'a, F: PrimeField> {
