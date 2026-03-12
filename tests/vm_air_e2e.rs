@@ -109,7 +109,7 @@ fn fib_trace_satisfies_vm_air() {
     "#;
 
     let trace = run_program_to_trace(source, 128, 128);
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
 
     assert_trace_satisfies_air(&trace, &air);
 }
@@ -122,7 +122,7 @@ fn const_halt_trace_satisfies_vm_air() {
     "#;
 
     let trace = run_program_to_trace(source, 8, 16);
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
 
     assert_trace_satisfies_air(&trace, &air);
 }
@@ -137,7 +137,7 @@ fn corrupted_initial_pc_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::Pc.idx()][0] = fr(123);
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -151,7 +151,7 @@ fn corrupted_initial_r0_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::R0.idx()][0] = fr(9);
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -165,7 +165,7 @@ fn corrupted_initial_halted_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::Halted.idx()][0] = Fr::one();
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -179,7 +179,7 @@ fn corrupted_booleanity_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::Halted.idx()][2] = fr(2);
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -194,7 +194,7 @@ fn corrupted_one_hot_opcode_is_detected() {
     trace.columns[TraceColumn::SConst.idx()][0] = Fr::one();
     trace.columns[TraceColumn::SHalt.idx()][0] = Fr::one();
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -208,7 +208,7 @@ fn corrupted_register_index_a_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::A.idx()][0] = fr(5);
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }
 
@@ -222,6 +222,6 @@ fn corrupted_unused_operand_for_const_is_detected() {
     let mut trace = run_program_to_trace(source, 8, 16);
     trace.columns[TraceColumn::B.idx()][0] = fr(9);
 
-    let air = VmAir::<Fr>::new();
+    let air = VmAir::<Fr>::default();
     assert_trace_violates_some_constraint(&trace, &air);
 }

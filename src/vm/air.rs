@@ -11,18 +11,20 @@ pub struct VmAir<F: PrimeField> {
 }
 
 impl<F: PrimeField> VmAir<F> {
-    pub fn new() -> Self {
-        Self {
-            constraints: build_vm_constraints(),
-        }
-    }
-
     pub fn from_constraints(constraints: Vec<Box<dyn Constraint<F>>>) -> Self {
         Self { constraints }
     }
 
     pub fn constraints(&self) -> &[Box<dyn Constraint<F>>] {
         &self.constraints
+    }
+}
+
+impl<F: PrimeField> Default for VmAir<F> {
+    fn default() -> Self {
+        Self {
+            constraints: build_vm_constraints(),
+        }
     }
 }
 
@@ -40,7 +42,7 @@ impl<F: PrimeField> Air<F> for VmAir<F> {
     }
 
     fn eval_constraint(&self, i: usize, row: &dyn RowAccess<F>) -> F {
-        self.constraints[i].eval(row)
+        self.constraints[i].eval(row) * row.z_h_inverse()
     }
 
     fn constraint_name(&self, i: usize) -> String {
