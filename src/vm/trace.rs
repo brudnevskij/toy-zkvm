@@ -216,7 +216,7 @@ pub fn rows_to_trace_table<F: PrimeField>(rows: &[ExecutionRow<F>]) -> TraceTabl
         .collect();
 
     for (i, row) in rows.iter().enumerate() {
-        columns[TraceColumn::T.idx()].push(from_usize::<F>(i));
+        columns[TraceColumn::T.idx()].push(from_usize::<F>(i + 1));
         columns[TraceColumn::Pc.idx()].push(row.pc);
         columns[TraceColumn::R0.idx()].push(row.regs[0]);
         columns[TraceColumn::R1.idx()].push(row.regs[1]);
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(trace.names[TraceColumn::SHalt.idx()], "s_halt");
         assert_eq!(trace.names[TraceColumn::Imm.idx()], "imm");
 
-        assert_eq!(trace.columns[TraceColumn::T.idx()], vec![fr(0), fr(1)]);
+        assert_eq!(trace.columns[TraceColumn::T.idx()], vec![fr(1), fr(2)]);
         assert_eq!(trace.columns[TraceColumn::Pc.idx()], vec![fr(0), fr(1)]);
         assert_eq!(trace.columns[TraceColumn::R0.idx()], vec![fr(10), fr(20)]);
         assert_eq!(trace.columns[TraceColumn::R1.idx()], vec![fr(11), fr(21)]);
