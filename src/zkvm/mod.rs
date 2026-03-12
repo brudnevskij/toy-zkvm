@@ -1,6 +1,7 @@
 use crate::backend::Transcript;
 use ark_ff::PrimeField;
 
+mod constraints;
 mod params;
 mod prover;
 mod verifier;
