@@ -8,6 +8,49 @@ use crate::{
     },
 };
 
+pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
+    vec![
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::Halted,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SConst,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SMov,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SAdd,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SSub,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SJmp,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SJnz,
+        }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::SHalt,
+        }),
+        Box::new(OneHotOpcode),
+        Box::new(RegisterIndexValidity {
+            column: TraceColumn::A,
+        }),
+        Box::new(RegisterIndexValidity {
+            column: TraceColumn::B,
+        }),
+        Box::new(UnusedOperandsConstraint),
+        Box::new(InitPcConstraint),
+        Box::new(InitR0Constraint),
+        Box::new(InitR1Constraint),
+        Box::new(InitR2Constraint),
+        Box::new(InitR3Constraint),
+        Box::new(InitHaltedConstraint),
+    ]
+}
+
 fn col<F: PrimeField>(row: &dyn RowAccess<F>, c: TraceColumn) -> F {
     row.current_step_column_value(c.idx())
 }
@@ -18,6 +61,14 @@ fn previous_col<F: PrimeField>(row: &dyn RowAccess<F>, c: TraceColumn) -> F {
 
 fn reg_index_vanishing<F: PrimeField>(x: F) -> F {
     x * (x - F::one()) * (x - F::from(2u64)) * (x - F::from(3u64))
+}
+
+fn first_row_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    if row.idx() == 0 { F::one() } else { F::zero() }
+}
+
+fn transition_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    if row.idx() == 0 { F::zero() } else { F::one() }
 }
 
 pub struct BooleanityConstraint {
@@ -131,5 +182,77 @@ impl<F: PrimeField> Constraint<F> for UnusedOperandsConstraint {
             + s_halt * b
             + s_halt * imm
             + s_halt * target
+    }
+}
+
+pub struct InitPcConstraint;
+
+impl<F: PrimeField> Constraint<F> for InitPcConstraint {
+    fn name(&self) -> String {
+        "initial pc is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::Pc) * first_row_selector(row)
+    }
+}
+
+pub struct InitR0Constraint;
+
+impl<F: PrimeField> Constraint<F> for InitR0Constraint {
+    fn name(&self) -> String {
+        "initial r0 is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::R0) * first_row_selector(row)
+    }
+}
+
+pub struct InitR1Constraint;
+
+impl<F: PrimeField> Constraint<F> for InitR1Constraint {
+    fn name(&self) -> String {
+        "initial r1 is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::R1) * first_row_selector(row)
+    }
+}
+
+pub struct InitR2Constraint;
+
+impl<F: PrimeField> Constraint<F> for InitR2Constraint {
+    fn name(&self) -> String {
+        "initial r2 is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::R2) * first_row_selector(row)
+    }
+}
+
+pub struct InitR3Constraint;
+
+impl<F: PrimeField> Constraint<F> for InitR3Constraint {
+    fn name(&self) -> String {
+        "initial r3 is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::R3) * first_row_selector(row)
+    }
+}
+
+pub struct InitHaltedConstraint;
+
+impl<F: PrimeField> Constraint<F> for InitHaltedConstraint {
+    fn name(&self) -> String {
+        "initial halted is zero".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        col(row, TraceColumn::Halted) * first_row_selector(row)
     }
 }
