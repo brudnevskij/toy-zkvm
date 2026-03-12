@@ -12,6 +12,10 @@ fn col<F: PrimeField>(row: &dyn RowAccess<F>, c: TraceColumn) -> F {
     row.current_step_column_value(c.idx())
 }
 
+fn previous_col<F: PrimeField>(row: &dyn RowAccess<F>, c: TraceColumn) -> F {
+    row.previous_step_column_value(c.idx())
+}
+
 fn reg_index_vanishing<F: PrimeField>(x: F) -> F {
     x * (x - F::one()) * (x - F::from(2u64)) * (x - F::from(3u64))
 }
@@ -79,5 +83,53 @@ impl<F: PrimeField> Constraint<F> for RegisterIndexValidity {
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
         let x = col(row, self.column);
         self.operand_selector(row) * reg_index_vanishing(x)
+    }
+}
+
+pub struct UnusedOperandsConstraint;
+
+impl<F: PrimeField> Constraint<F> for UnusedOperandsConstraint {
+    fn name(&self) -> String {
+        "zeroing constraint for unused operands".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_const = col(row, SConst);
+        let s_mov = col(row, SMov);
+        let s_add = col(row, SAdd);
+        let s_sub = col(row, SSub);
+        let s_jmp = col(row, SJmp);
+        let s_jnz = col(row, SJnz);
+        let s_halt = col(row, SHalt);
+
+        let a = col(row, TraceColumn::A);
+        let b = col(row, TraceColumn::B);
+        let imm = col(row, TraceColumn::Imm);
+        let target = col(row, TraceColumn::Target);
+
+        // const
+        s_const * b
+            + s_const * target
+        // mov
+            + s_mov * imm
+            + s_mov * target
+        // add
+            + s_add * imm
+            + s_add * target
+        // sub
+            + s_sub * imm
+            + s_sub * target
+        // jmp
+            + s_jmp * a
+            + s_jmp * b
+            + s_jmp * imm
+        // jzn
+            + s_jnz * b
+            + s_jnz * imm
+        // halt
+            + s_halt * a
+            + s_halt * b
+            + s_halt * imm
+            + s_halt * target
     }
 }
