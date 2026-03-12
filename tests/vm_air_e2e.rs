@@ -1,9 +1,9 @@
 use ark_bn254::Fr;
-use ark_ff::{PrimeField, Zero};
+use ark_ff::{One, PrimeField, Zero};
 use toy_zkvm::{
     air::{Air, RowAccess, TraceTable},
     dsl::compile,
-    vm::{VmAir, VmState, rows_to_trace_table, run_rows},
+    vm::{TraceColumn, VmAir, VmState, rows_to_trace_table, run_rows},
 };
 
 fn fr(x: u64) -> Fr {
@@ -92,7 +92,7 @@ fn assert_trace_violates_some_constraint(trace: &TraceTable<Fr>, air: &VmAir<Fr>
 }
 
 #[test]
-fn fib_trace_satisfies_current_vm_air() {
+fn fib_trace_satisfies_vm_air() {
     let source = r#"
        const r0, 0
        const r1, 1
@@ -112,4 +112,116 @@ fn fib_trace_satisfies_current_vm_air() {
     let air = VmAir::<Fr>::new();
 
     assert_trace_satisfies_air(&trace, &air);
+}
+
+#[test]
+fn const_halt_trace_satisfies_vm_air() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let trace = run_program_to_trace(source, 8, 16);
+    let air = VmAir::<Fr>::new();
+
+    assert_trace_satisfies_air(&trace, &air);
+}
+
+#[test]
+fn corrupted_initial_pc_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::Pc.idx()][0] = fr(123);
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_initial_r0_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::R0.idx()][0] = fr(9);
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_initial_halted_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::Halted.idx()][0] = Fr::one();
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_booleanity_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::Halted.idx()][2] = fr(2);
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_one_hot_opcode_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::SConst.idx()][0] = Fr::one();
+    trace.columns[TraceColumn::SHalt.idx()][0] = Fr::one();
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_register_index_a_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::A.idx()][0] = fr(5);
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
+}
+
+#[test]
+fn corrupted_unused_operand_for_const_is_detected() {
+    let source = r#"
+        const r0, 7
+        halt
+    "#;
+
+    let mut trace = run_program_to_trace(source, 8, 16);
+    trace.columns[TraceColumn::B.idx()][0] = fr(9);
+
+    let air = VmAir::<Fr>::new();
+    assert_trace_violates_some_constraint(&trace, &air);
 }
