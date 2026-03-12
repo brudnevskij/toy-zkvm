@@ -7,6 +7,7 @@ pub trait RowAccess<F: PrimeField> {
     fn current_step_column_value(&self, column: usize) -> F;
     fn previous_step_column_value(&self, column: usize) -> F;
 
+    fn idx(&self) -> usize;
     fn x(&self) -> F;
     fn x0(&self) -> F;
     fn x_last(&self) -> F;

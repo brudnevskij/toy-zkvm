@@ -54,6 +54,10 @@ impl<'a, F: PrimeField> RowAccess<F> for VerifierRowLdeView<'a, F> {
         self.previous_row[column]
     }
 
+    fn idx(&self) -> usize {
+        self.i
+    }
+
     fn x(&self) -> F {
         self.x
     }

@@ -32,6 +32,10 @@ impl<'a, F: PrimeField> RowAccess<F> for ProverRowLdeView<'a, F> {
         self.columns[column][self.previous_i]
     }
 
+    fn idx(&self) -> usize {
+        self.i
+    }
+
     fn x(&self) -> F {
         self.x
     }
