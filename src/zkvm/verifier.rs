@@ -3,7 +3,7 @@ use crate::{
     backend::{Blake3Hasher, FriVerificationError, Transcript, fri_verify, verify_leaf},
     zkvm::{
         TraceQuery, TranscriptLabels, ZkvmProof, ZkvmPublicParameters, generate_mixing_challenges,
-        hash_trace_row_iter,
+        hash_trace_row_iter, params::PreprocessedTraceEvals,
     },
 };
 use ark_ff::PrimeField;
@@ -43,6 +43,7 @@ struct VerifierRowLdeView<'a, F: PrimeField> {
     pub z_h_inverse: F, // (x^n - 1)^-1
     pub current_row: &'a [F],
     pub previous_row: &'a [F],
+    pub preprocessed_evals: &'a PreprocessedTraceEvals<F>,
 }
 
 impl<'a, F: PrimeField> RowAccess<F> for VerifierRowLdeView<'a, F> {
@@ -73,6 +74,14 @@ impl<'a, F: PrimeField> RowAccess<F> for VerifierRowLdeView<'a, F> {
     fn z_h_inverse(&self) -> F {
         self.z_h_inverse
     }
+
+    fn first_row_selector(&self) -> F {
+        self.preprocessed_evals.first_row_selector[self.i]
+    }
+
+    fn last_row_selector(&self) -> F {
+        self.preprocessed_evals.last_row_selector[self.i]
+    }
 }
 
 pub fn verify<A, F>(
@@ -95,6 +104,7 @@ where
         return Err(ZkvmVerifyError::BadFriProof);
     }
 
+    let preprocessed_evals = public_params.derive_preprocessed_trace_evals();
     let trace_domain_size = public_params.trace_domain.size();
     let x0 = public_params.trace_domain.element(0);
     let x_last = public_params.trace_domain.element(trace_domain_size - 1);
@@ -157,6 +167,7 @@ where
             z_h_inverse,
             current_row,
             previous_row,
+            preprocessed_evals: &preprocessed_evals,
         };
 
         if first_round.left.value != eval_composition(air, &row, &alphas) {

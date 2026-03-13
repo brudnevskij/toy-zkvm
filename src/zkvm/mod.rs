@@ -7,7 +7,7 @@ mod prover;
 mod verifier;
 
 pub use constraints::build_vm_constraints;
-pub use params::{TranscriptLabels, ZkvmPublicParameters};
+pub use params::{PreprocessedTraceEvals, TranscriptLabels, ZkvmPublicParameters};
 pub use prover::{TraceQuery, ZkvmProof, ZkvmProveError, hash_trace_row_iter, prove};
 pub use verifier::{ZkvmVerifyError, verify};
 

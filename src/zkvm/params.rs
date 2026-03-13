@@ -27,6 +27,12 @@ impl TranscriptLabels {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PreprocessedTraceEvals<F> {
+    pub first_row_selector: Vec<F>,
+    pub last_row_selector: Vec<F>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ZkvmPublicParameters<F: PrimeField> {
     pub trace_domain: Radix2EvaluationDomain<F>,
@@ -59,5 +65,54 @@ impl<F: PrimeField> ZkvmPublicParameters<F> {
             TranscriptLabels::FRI_NUM_QUERIES,
             &self.fri_options.query_number.to_le_bytes(),
         );
+    }
+
+    pub fn derive_preprocessed_trace_evals(&self) -> PreprocessedTraceEvals<F> {
+        let n = self.trace_domain.size();
+        let n_f = F::from(n as u64);
+
+        let g = self.trace_domain.group_gen();
+        let w = self.lde_domain.group_gen();
+
+        let x0 = F::one();
+        let x_last = g.pow([(n - 1) as u64]);
+
+        let zh_prime_x0 = n_f * x0.pow([(n - 1) as u64]);
+        let zh_prime_x_last = n_f * x_last.pow([(n - 1) as u64]);
+
+        let inv_zh_prime_x0 = zh_prime_x0.inverse().expect("n must be invertible");
+        let inv_zh_prime_x_last = zh_prime_x_last
+            .inverse()
+            .expect("n * x_last^(n-1) must be invertible");
+
+        let mut first_row_selector = Vec::with_capacity(self.lde_domain.size());
+        let mut last_row_selector = Vec::with_capacity(self.lde_domain.size());
+
+        let mut x = self.shift;
+        for _ in 0..self.lde_domain.size() {
+            let z_h = x.pow([n as u64]) - F::one();
+
+            let first = z_h
+                * (x - x0)
+                    .inverse()
+                    .expect("shifted LDE coset must avoid trace domain")
+                * inv_zh_prime_x0;
+
+            let last = z_h
+                * (x - x_last)
+                    .inverse()
+                    .expect("shifted LDE coset must avoid trace domain")
+                * inv_zh_prime_x_last;
+
+            first_row_selector.push(first);
+            last_row_selector.push(last);
+
+            x *= w;
+        }
+
+        PreprocessedTraceEvals {
+            first_row_selector,
+            last_row_selector,
+        }
     }
 }

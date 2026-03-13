@@ -12,6 +12,9 @@ pub trait RowAccess<F: PrimeField> {
     fn x0(&self) -> F;
     fn x_last(&self) -> F;
     fn z_h_inverse(&self) -> F;
+
+    fn first_row_selector(&self) -> F;
+    fn last_row_selector(&self) -> F;
 }
 
 pub trait Constraint<F: PrimeField>: Send + Sync {

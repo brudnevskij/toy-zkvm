@@ -63,10 +63,6 @@ fn reg_index_vanishing<F: PrimeField>(x: F) -> F {
     x * (x - F::one()) * (x - F::from(2u64)) * (x - F::from(3u64))
 }
 
-fn first_row_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    if row.idx() == 0 { F::one() } else { F::zero() }
-}
-
 fn transition_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
     if row.idx() == 0 { F::zero() } else { F::one() }
 }
@@ -193,7 +189,7 @@ impl<F: PrimeField> Constraint<F> for InitPcConstraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::Pc) * first_row_selector(row)
+        col(row, TraceColumn::Pc) * row.first_row_selector()
     }
 }
 
@@ -205,7 +201,7 @@ impl<F: PrimeField> Constraint<F> for InitR0Constraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R0) * first_row_selector(row)
+        col(row, TraceColumn::R0) * row.first_row_selector()
     }
 }
 
@@ -217,7 +213,7 @@ impl<F: PrimeField> Constraint<F> for InitR1Constraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R1) * first_row_selector(row)
+        col(row, TraceColumn::R1) * row.first_row_selector()
     }
 }
 
@@ -229,7 +225,7 @@ impl<F: PrimeField> Constraint<F> for InitR2Constraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R2) * first_row_selector(row)
+        col(row, TraceColumn::R2) * row.first_row_selector()
     }
 }
 
@@ -241,7 +237,7 @@ impl<F: PrimeField> Constraint<F> for InitR3Constraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R3) * first_row_selector(row)
+        col(row, TraceColumn::R3) * row.first_row_selector()
     }
 }
 
@@ -253,6 +249,6 @@ impl<F: PrimeField> Constraint<F> for InitHaltedConstraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::Halted) * first_row_selector(row)
+        col(row, TraceColumn::Halted) * row.first_row_selector()
     }
 }
