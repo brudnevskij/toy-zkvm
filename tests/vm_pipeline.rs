@@ -3,7 +3,7 @@ use ark_ff::{One, Zero};
 use thiserror::Error;
 use toy_zkvm::{
     dsl::{CompileError, ResolveError, compile},
-    vm::{ExecutionRow, VmError, VmState, run_rows},
+    vm::{ExecutionRow, VmError, VmState, rows_to_trace_table, run_rows},
 };
 
 #[derive(Error, Debug)]
