@@ -163,8 +163,8 @@ pub fn prove<F: PrimeField + FftField>(
         g = g.square();
         shift = shift.square();
 
-        // halving upper bound
-        current_max_degree = current_max_degree.div_ceil(2);
+        // halving lower bound
+        current_max_degree /= 2;
     }
 
     // interpolating final poly
@@ -235,6 +235,7 @@ fn produce_query<F: PrimeField>(
             },
         });
 
+        // domain_size / 2
         domain_size >>= 1;
         idx &= half - 1;
     }
@@ -445,18 +446,12 @@ fn fold_evaluation_pair<F: Field>(left_value: F, right_value: F, x_inv: F, beta:
 }
 
 fn degree_after_folds(max_degree: usize, folds: usize) -> usize {
-    if folds == 0 {
-        return max_degree;
-    }
-    if max_degree == 0 {
-        return 0;
-    }
     if folds >= usize::BITS as usize {
         return 1;
     }
 
     let denom: usize = 1usize << folds;
-    max_degree / denom + usize::from(max_degree.is_multiple_of(denom))
+    max_degree / denom
 }
 
 fn verify_round_openings<F: PrimeField + CanonicalSerialize>(
