@@ -154,9 +154,6 @@ where
     for column in trace.columns.iter() {
         disguised_evaluations.push(lde_extend_column(column, trace_domain, lde_domain, shift));
     }
-    for lde_column in &disguised_evaluations {
-        print_poly_degree_from_lde_evals(lde_column, lde_domain);
-    }
 
     let trace_tree = generate_trace_tree(lde_domain_size, &disguised_evaluations)?;
     let trace_root = trace_tree.root();
@@ -175,7 +172,6 @@ where
         &public_params.derive_preprocessed_trace_evals(),
     )?;
 
-    print_poly_degree_from_lde_evals(&verification_evaluations, lde_domain);
     let fri_proof = fri_prove(&verification_evaluations, lde_domain, fri_options, tx)?;
 
     // open same indexes as in fri
@@ -268,30 +264,6 @@ fn generate_trace_queries<F: PrimeField>(
     }
 
     Ok(trace_queries)
-}
-fn print_poly_degree_from_lde_evals<F: FftField>(
-    lde_evals: &[F],
-    lde_domain: &Radix2EvaluationDomain<F>,
-) -> Option<usize> {
-    assert_eq!(lde_evals.len(), lde_domain.size());
-
-    // Interpolate evaluations on the LDE domain back to coefficient form.
-    let mut coeffs = lde_evals.to_vec();
-    lde_domain.ifft_in_place(&mut coeffs);
-
-    // Find the highest nonzero coefficient.
-    let degree = coeffs.iter().rposition(|c| !c.is_zero());
-
-    match degree {
-        Some(d) => {
-            println!("Polynomial degree: {}", d);
-            Some(d)
-        }
-        None => {
-            println!("Polynomial is zero, degree is undefined");
-            None
-        }
-    }
 }
 
 /// Generate LDE of a column, by iFFting evaluations on N to coefficients, scaling them with a shift factor
