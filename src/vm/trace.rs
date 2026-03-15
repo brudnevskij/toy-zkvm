@@ -558,4 +558,47 @@ mod tests {
         assert_eq!(trace.columns[TraceColumn::Imm.idx()], vec![fr(7), fr(0)]);
         assert_eq!(trace.columns[TraceColumn::Target.idx()], vec![fr(0), fr(0)]);
     }
+
+    #[test]
+    fn decode_row_jnz_nonzero_cond_sets_taken_and_inverse() {
+        let state = base_state(); // r1 = 20
+        let row = decode_row(
+            &state,
+            &Instruction::Jnz {
+                cond: Reg::R1,
+                target: 9,
+            },
+        );
+
+        assert_eq!(row.s_jnz, fr(1));
+        assert_eq!(row.a, fr(1));
+        assert_eq!(row.target, fr(9));
+
+        assert_eq!(row.jnz_taken, fr(1));
+        assert_eq!(row.jnz_inv * fr(20), fr(1));
+    }
+
+    #[test]
+    fn decode_row_jnz_zero_cond_sets_not_taken_and_zero_inverse() {
+        let state = VmState {
+            pc: 3,
+            regs: [fr(10), fr(0), fr(30), fr(40)],
+            halted: false,
+        };
+
+        let row = decode_row(
+            &state,
+            &Instruction::Jnz {
+                cond: Reg::R1,
+                target: 9,
+            },
+        );
+
+        assert_eq!(row.s_jnz, fr(1));
+        assert_eq!(row.a, fr(1));
+        assert_eq!(row.target, fr(9));
+
+        assert_eq!(row.jnz_taken, fr(0));
+        assert_eq!(row.jnz_inv, fr(0));
+    }
 }
