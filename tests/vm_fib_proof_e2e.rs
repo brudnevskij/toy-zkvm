@@ -83,7 +83,7 @@ fn prove_and_verify_fibonacci_vm_trace_with_current_air() {
         lde_domain,
         shift,
         fri_options: FriOptions {
-            max_degree: trace.n() * 2,
+            max_degree: trace.n() * 4,
             max_remainder_degree: 1,
             query_number: 64,
             shift,

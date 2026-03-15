@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use ark_ff::PrimeField;
 
 use crate::{
@@ -36,6 +34,9 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
         Box::new(BooleanityConstraint {
             column: TraceColumn::SHalt,
         }),
+        Box::new(BooleanityConstraint {
+            column: TraceColumn::JnzTaken,
+        }),
         Box::new(OneHotOpcode),
         Box::new(RegisterIndexValidity {
             column: TraceColumn::A,
@@ -64,6 +65,10 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
         }),
         Box::new(HaltedFreezeConstraint),
         Box::new(HaltEntryConstraint),
+        Box::new(PcTransitionConstraint),
+        Box::new(JnzPcTransitionConstraint),
+        Box::new(JnzNonzeroImpliesTakenConstraint),
+        Box::new(JnzInverseConstraint),
     ]
 }
 
@@ -322,13 +327,11 @@ impl<F: PrimeField> Constraint<F> for HaltEntryConstraint {
     }
 }
 
-pub struct PcTransitionConstraint {
-    pub column: TraceColumn,
-}
+pub struct PcTransitionConstraint;
 
 impl<F: PrimeField> Constraint<F> for PcTransitionConstraint {
     fn name(&self) -> String {
-        format!("incremental PC transition for {}", self.column.name())
+        "PC transition constraint".to_string()
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
@@ -338,8 +341,6 @@ impl<F: PrimeField> Constraint<F> for PcTransitionConstraint {
         let s_sub = previous_col(row, SSub);
         let s_jmp = previous_col(row, SJmp);
         let incrementing_ops = s_const + s_mov + s_add + s_sub;
-
-        let s_jnz = previous_col(row, SJnz);
         let s_halt = previous_col(row, SHalt);
 
         let pc = col(row, TraceColumn::Pc);
@@ -350,5 +351,59 @@ impl<F: PrimeField> Constraint<F> for PcTransitionConstraint {
             * (incrementing_ops * (pc - pc_prev - F::one())
                 + s_jmp * (pc - target_prev)
                 + s_halt * (pc - pc_prev))
+    }
+}
+
+pub struct JnzPcTransitionConstraint;
+
+impl<F: PrimeField> Constraint<F> for JnzPcTransitionConstraint {
+    fn name(&self) -> String {
+        "jnz pc transition".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_jnz = previous_col(row, TraceColumn::SJnz);
+        let taken = previous_col(row, TraceColumn::JnzTaken);
+
+        let pc_prev = previous_col(row, TraceColumn::Pc);
+        let pc_cur = col(row, TraceColumn::Pc);
+        let target = previous_col(row, TraceColumn::Target);
+
+        let expected_pc = taken * target + (F::one() - taken) * (pc_prev + F::one());
+
+        (pc_cur - expected_pc) * s_jnz * transition_selector(row)
+    }
+}
+
+pub struct JnzNonzeroImpliesTakenConstraint;
+
+impl<F: PrimeField> Constraint<F> for JnzNonzeroImpliesTakenConstraint {
+    fn name(&self) -> String {
+        "jnz nonzero condition implies taken".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_jnz = previous_col(row, TraceColumn::SJnz);
+        let taken = previous_col(row, TraceColumn::JnzTaken);
+        let cond = prev_reg_a(row);
+
+        cond * (F::one() - taken) * s_jnz * transition_selector(row)
+    }
+}
+
+pub struct JnzInverseConstraint;
+
+impl<F: PrimeField> Constraint<F> for JnzInverseConstraint {
+    fn name(&self) -> String {
+        "jnz inverse relation".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_jnz = previous_col(row, TraceColumn::SJnz);
+        let taken = previous_col(row, TraceColumn::JnzTaken);
+        let inv = previous_col(row, TraceColumn::JnzTakenInv);
+        let cond = prev_reg_a(row);
+
+        (cond * inv - taken) * s_jnz * transition_selector(row)
     }
 }
