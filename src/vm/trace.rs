@@ -20,10 +20,12 @@ pub struct ExecutionRow<F: PrimeField> {
     pub s_jnz: F,
     pub s_halt: F,
 
-    pub a: F,      // reg index (dst or cond)
-    pub b: F,      // reg index (src)
-    pub imm: F,    // immediate
-    pub target: F, // target pc
+    pub a: F,         // reg index (dst or cond)
+    pub b: F,         // reg index (src)
+    pub imm: F,       // immediate
+    pub target: F,    // target pc
+    pub jnz_taken: F, // jnz branching flag
+    pub jnz_inv: F,   // jnz branching inverse
 }
 
 fn zero<F: PrimeField>() -> F {
@@ -68,6 +70,8 @@ pub fn decode_row<F: PrimeField>(state: &VmState<F>, instr: &Instruction) -> Exe
         b: zero(),
         imm: zero(),
         target: zero(),
+        jnz_taken: zero(),
+        jnz_inv: zero(),
     };
 
     match instr {
@@ -99,6 +103,16 @@ pub fn decode_row<F: PrimeField>(state: &VmState<F>, instr: &Instruction) -> Exe
             row.s_jnz = one();
             row.a = fe_reg::<F>(*cond);
             row.target = from_usize(*target);
+
+            // setting jnz flags
+            let cond_value = state.regs[cond.idx()];
+            if cond_value.is_zero() {
+                row.jnz_taken = zero();
+                row.jnz_inv = zero();
+            } else {
+                row.jnz_taken = one();
+                row.jnz_inv = cond_value.inverse().unwrap();
+            }
         }
         Instruction::Halt => {
             row.s_halt = one();
@@ -128,10 +142,12 @@ pub enum TraceColumn {
     B,
     Imm,
     Target,
+    JnzTaken,
+    JnzTakenInv,
 }
 
 impl TraceColumn {
-    pub const COUNT: usize = 18;
+    pub const COUNT: usize = 20;
 
     pub const fn idx(self) -> usize {
         match self {
@@ -153,6 +169,8 @@ impl TraceColumn {
             Self::B => 15,
             Self::Imm => 16,
             Self::Target => 17,
+            Self::JnzTaken => 18,
+            Self::JnzTakenInv => 19,
         }
     }
 
@@ -176,6 +194,8 @@ impl TraceColumn {
             Self::B => "b",
             Self::Imm => "imm",
             Self::Target => "target",
+            Self::JnzTaken => "jnz taken",
+            Self::JnzTakenInv => "jnz taken inverse",
         }
     }
 
@@ -199,6 +219,8 @@ impl TraceColumn {
             Self::B,
             Self::Imm,
             Self::Target,
+            Self::JnzTaken,
+            Self::JnzTakenInv,
         ]
     }
 }
@@ -236,6 +258,8 @@ pub fn rows_to_trace_table<F: PrimeField>(rows: &[ExecutionRow<F>]) -> TraceTabl
         columns[TraceColumn::B.idx()].push(row.b);
         columns[TraceColumn::Imm.idx()].push(row.imm);
         columns[TraceColumn::Target.idx()].push(row.target);
+        columns[TraceColumn::JnzTaken.idx()].push(row.jnz_taken);
+        columns[TraceColumn::JnzTakenInv.idx()].push(row.jnz_inv);
     }
 
     TraceTable::new(columns, column_names)
@@ -244,7 +268,7 @@ pub fn rows_to_trace_table<F: PrimeField>(rows: &[ExecutionRow<F>]) -> TraceTabl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bn254::Fr;
+    use ark_bn254::{Fr, fr};
 
     fn fr(x: u64) -> Fr {
         Fr::from(x)
@@ -480,6 +504,8 @@ mod tests {
             b: fr(0),
             imm: fr(7),
             target: fr(0),
+            jnz_taken: fr(0),
+            jnz_inv: fr(0),
         };
 
         let row1 = ExecutionRow {
@@ -497,6 +523,8 @@ mod tests {
             b: fr(0),
             imm: fr(0),
             target: fr(0),
+            jnz_taken: fr(0),
+            jnz_inv: fr(0),
         };
 
         let trace = rows_to_trace_table(&[row0, row1]);
