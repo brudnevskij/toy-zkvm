@@ -345,7 +345,7 @@ impl<F: PrimeField> Constraint<F> for PcTransitionConstraint {
 
         let pc = col(row, TraceColumn::Pc);
         let pc_prev = previous_col(row, TraceColumn::Pc);
-        let target_prev = col(row, TraceColumn::Target);
+        let target_prev = previous_col(row, TraceColumn::Target);
 
         transition_selector(row)
             * (incrementing_ops * (pc - pc_prev - F::one())
