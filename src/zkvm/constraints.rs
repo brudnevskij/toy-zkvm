@@ -1,3 +1,5 @@
+use std::fmt::format;
+
 use ark_ff::PrimeField;
 
 use crate::{
@@ -42,12 +44,24 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
             column: TraceColumn::B,
         }),
         Box::new(UnusedOperandsConstraint),
-        Box::new(InitPcConstraint),
-        Box::new(InitR0Constraint),
-        Box::new(InitR1Constraint),
-        Box::new(InitR2Constraint),
-        Box::new(InitR3Constraint),
-        Box::new(InitHaltedConstraint),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::Pc,
+        }),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::R0,
+        }),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::R1,
+        }),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::R2,
+        }),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::R3,
+        }),
+        Box::new(InitZeroConstraint {
+            column: TraceColumn::Halted,
+        }),
         Box::new(HaltedFreezeConstraint),
         Box::new(HaltEntryConstraint),
     ]
@@ -183,75 +197,17 @@ impl<F: PrimeField> Constraint<F> for UnusedOperandsConstraint {
     }
 }
 
-pub struct InitPcConstraint;
-
-impl<F: PrimeField> Constraint<F> for InitPcConstraint {
-    fn name(&self) -> String {
-        "initial pc is zero".to_string()
-    }
-
-    fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::Pc) * row.first_row_selector()
-    }
+pub struct InitZeroConstraint {
+    pub column: TraceColumn,
 }
 
-pub struct InitR0Constraint;
-
-impl<F: PrimeField> Constraint<F> for InitR0Constraint {
+impl<F: PrimeField> Constraint<F> for InitZeroConstraint {
     fn name(&self) -> String {
-        "initial r0 is zero".to_string()
+        format!("init 0 constraint for {}", self.column.name())
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R0) * row.first_row_selector()
-    }
-}
-
-pub struct InitR1Constraint;
-
-impl<F: PrimeField> Constraint<F> for InitR1Constraint {
-    fn name(&self) -> String {
-        "initial r1 is zero".to_string()
-    }
-
-    fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R1) * row.first_row_selector()
-    }
-}
-
-pub struct InitR2Constraint;
-
-impl<F: PrimeField> Constraint<F> for InitR2Constraint {
-    fn name(&self) -> String {
-        "initial r2 is zero".to_string()
-    }
-
-    fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R2) * row.first_row_selector()
-    }
-}
-
-pub struct InitR3Constraint;
-
-impl<F: PrimeField> Constraint<F> for InitR3Constraint {
-    fn name(&self) -> String {
-        "initial r3 is zero".to_string()
-    }
-
-    fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::R3) * row.first_row_selector()
-    }
-}
-
-pub struct InitHaltedConstraint;
-
-impl<F: PrimeField> Constraint<F> for InitHaltedConstraint {
-    fn name(&self) -> String {
-        "initial halted is zero".to_string()
-    }
-
-    fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        col(row, TraceColumn::Halted) * row.first_row_selector()
+        col(row, self.column) * row.first_row_selector()
     }
 }
 
