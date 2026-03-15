@@ -23,8 +23,8 @@ impl<'a, F: PrimeField> RowAccess<F> for TestRow<'a, F> {
     }
 
     fn previous_step_column_value(&self, column: usize) -> F {
-        assert!(self.row_idx > 0, "previous row requested for row 0");
-        self.trace.columns[column][self.row_idx - 1]
+        let idx = (self.row_idx + self.trace.n() - 1) % self.trace.n();
+        self.trace.columns[column][idx]
     }
 
     fn idx(&self) -> usize {

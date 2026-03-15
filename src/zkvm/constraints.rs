@@ -48,6 +48,8 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
         Box::new(InitR2Constraint),
         Box::new(InitR3Constraint),
         Box::new(InitHaltedConstraint),
+        Box::new(HaltedFreezeConstraint),
+        Box::new(HaltEntryConstraint),
     ]
 }
 
@@ -64,7 +66,7 @@ fn reg_index_vanishing<F: PrimeField>(x: F) -> F {
 }
 
 fn transition_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
-    if row.idx() == 0 { F::zero() } else { F::one() }
+    F::one() - row.first_row_selector()
 }
 
 pub struct BooleanityConstraint {
@@ -250,5 +252,57 @@ impl<F: PrimeField> Constraint<F> for InitHaltedConstraint {
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
         col(row, TraceColumn::Halted) * row.first_row_selector()
+    }
+}
+
+pub struct HaltedFreezeConstraint;
+
+impl<F: PrimeField> Constraint<F> for HaltedFreezeConstraint {
+    fn name(&self) -> String {
+        "machine stays frozen after halt".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let transition = transition_selector(row);
+
+        let halted = col(row, TraceColumn::Halted);
+        let halted_prev = previous_col(row, TraceColumn::Halted);
+
+        let pc = col(row, TraceColumn::Pc);
+        let pc_prev = previous_col(row, TraceColumn::Pc);
+
+        let r0 = col(row, TraceColumn::R0);
+        let r0_prev = previous_col(row, TraceColumn::R0);
+
+        let r1 = col(row, TraceColumn::R1);
+        let r1_prev = previous_col(row, TraceColumn::R1);
+
+        let r2 = col(row, TraceColumn::R2);
+        let r2_prev = previous_col(row, TraceColumn::R2);
+
+        let r3 = col(row, TraceColumn::R3);
+        let r3_prev = previous_col(row, TraceColumn::R3);
+
+        transition
+            * (halted_prev * (halted - F::one())
+                + halted_prev * (pc - pc_prev)
+                + halted_prev * (r0 - r0_prev)
+                + halted_prev * (r1 - r1_prev)
+                + halted_prev * (r2 - r2_prev)
+                + halted_prev * (r3 - r3_prev))
+    }
+}
+
+pub struct HaltEntryConstraint;
+
+impl<F: PrimeField> Constraint<F> for HaltEntryConstraint {
+    fn name(&self) -> String {
+        "enforece halt opcode behaviour".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_halt_prev = previous_col(row, SHalt);
+        let halted = col(row, TraceColumn::Halted);
+        (s_halt_prev * (halted - F::one())) * transition_selector(row)
     }
 }
