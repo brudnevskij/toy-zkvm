@@ -83,6 +83,65 @@ fn transition_selector<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
     F::one() - row.first_row_selector()
 }
 
+fn lagrange_at_0_1_2_3<F: PrimeField>(x: F) -> (F, F, F, F) {
+    let one = F::one();
+    let two = F::from(2u64);
+    let three = F::from(3u64);
+
+    // Precomputed denominator inverses:
+    // l0(x): denom = (0-1)(0-2)(0-3) = -6
+    // l1(x): denom = (1-0)(1-2)(1-3) = 2
+    // l2(x): denom = (2-0)(2-1)(2-3) = -2
+    // l3(x): denom = (3-0)(3-1)(3-2) = 6
+    let inv_neg_6 = (-F::from(6u64)).inverse().expect("nonzero");
+    let inv_2 = F::from(2u64).inverse().expect("nonzero");
+    let inv_neg_2 = (-F::from(2u64)).inverse().expect("nonzero");
+    let inv_6 = F::from(6u64).inverse().expect("nonzero");
+
+    let is_0 = (x - one) * (x - two) * (x - three) * inv_neg_6;
+    let is_1 = x * (x - two) * (x - three) * inv_2;
+    let is_2 = x * (x - one) * (x - three) * inv_neg_2;
+    let is_3 = x * (x - one) * (x - two) * inv_6;
+
+    (is_0, is_1, is_2, is_3)
+}
+
+fn a_selectors<F: PrimeField>(row: &dyn RowAccess<F>) -> (F, F, F, F) {
+    let a = col(row, TraceColumn::A);
+    lagrange_at_0_1_2_3(a)
+}
+
+fn prev_a_selectors<F: PrimeField>(row: &dyn RowAccess<F>) -> (F, F, F, F) {
+    let a_prev = previous_col(row, TraceColumn::A);
+    lagrange_at_0_1_2_3(a_prev)
+}
+
+fn prev_reg_a<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    let (is_a_0, is_a_1, is_a_2, is_a_3) = prev_a_selectors(row);
+
+    let r0_prev = previous_col(row, TraceColumn::R0);
+    let r1_prev = previous_col(row, TraceColumn::R1);
+    let r2_prev = previous_col(row, TraceColumn::R2);
+    let r3_prev = previous_col(row, TraceColumn::R3);
+
+    is_a_0 * r0_prev + is_a_1 * r1_prev + is_a_2 * r2_prev + is_a_3 * r3_prev
+}
+
+fn prev_b_selectors<F: PrimeField>(row: &dyn RowAccess<F>) -> (F, F, F, F) {
+    let b_prev = previous_col(row, TraceColumn::B);
+    lagrange_at_0_1_2_3(b_prev)
+}
+
+fn prev_reg_b<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    let (is_b_0, is_b_1, is_b_2, is_b_3) = prev_b_selectors(row);
+
+    let r0_prev = previous_col(row, TraceColumn::R0);
+    let r1_prev = previous_col(row, TraceColumn::R1);
+    let r2_prev = previous_col(row, TraceColumn::R2);
+    let r3_prev = previous_col(row, TraceColumn::R3);
+
+    is_b_0 * r0_prev + is_b_1 * r1_prev + is_b_2 * r2_prev + is_b_3 * r3_prev
+}
 pub struct BooleanityConstraint {
     pub column: TraceColumn,
 }
@@ -260,5 +319,36 @@ impl<F: PrimeField> Constraint<F> for HaltEntryConstraint {
         let s_halt_prev = previous_col(row, SHalt);
         let halted = col(row, TraceColumn::Halted);
         (s_halt_prev * (halted - F::one())) * transition_selector(row)
+    }
+}
+
+pub struct PcTransitionConstraint {
+    pub column: TraceColumn,
+}
+
+impl<F: PrimeField> Constraint<F> for PcTransitionConstraint {
+    fn name(&self) -> String {
+        format!("incremental PC transition for {}", self.column.name())
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_const = previous_col(row, SConst);
+        let s_mov = previous_col(row, SMov);
+        let s_add = previous_col(row, SAdd);
+        let s_sub = previous_col(row, SSub);
+        let s_jmp = previous_col(row, SJmp);
+        let incrementing_ops = s_const + s_mov + s_add + s_sub;
+
+        let s_jnz = previous_col(row, SJnz);
+        let s_halt = previous_col(row, SHalt);
+
+        let pc = col(row, TraceColumn::Pc);
+        let pc_prev = previous_col(row, TraceColumn::Pc);
+        let target_prev = col(row, TraceColumn::Target);
+
+        transition_selector(row)
+            * (incrementing_ops * (pc - pc_prev - F::one())
+                + s_jmp * (pc - target_prev)
+                + s_halt * (pc - pc_prev))
     }
 }
