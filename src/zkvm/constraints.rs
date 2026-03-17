@@ -69,6 +69,10 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
         Box::new(JnzPcTransitionConstraint),
         Box::new(JnzNonzeroImpliesTakenConstraint),
         Box::new(JnzInverseConstraint),
+        Box::new(ConstTransitionConstraint),
+        Box::new(MovTransitionConstraint),
+        Box::new(AddTransitionConstraint),
+        Box::new(SubTransitionConstraint),
     ]
 }
 
@@ -121,6 +125,29 @@ fn prev_a_selectors<F: PrimeField>(row: &dyn RowAccess<F>) -> (F, F, F, F) {
     lagrange_at_0_1_2_3(a_prev)
 }
 
+fn reg_a<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    let (is_a_0, is_a_1, is_a_2, is_a_3) = a_selectors(row);
+
+    let r0 = col(row, TraceColumn::R0);
+    let r1 = col(row, TraceColumn::R1);
+    let r2 = col(row, TraceColumn::R2);
+    let r3 = col(row, TraceColumn::R3);
+
+    is_a_0 * r0 + is_a_1 * r1 + is_a_2 * r2 + is_a_3 * r3
+}
+
+// get current value of previously used register in a
+fn cur_reg_by_prev_a<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    let (is_a_0, is_a_1, is_a_2, is_a_3) = prev_a_selectors(row);
+
+    let r0 = col(row, TraceColumn::R0);
+    let r1 = col(row, TraceColumn::R1);
+    let r2 = col(row, TraceColumn::R2);
+    let r3 = col(row, TraceColumn::R3);
+
+    is_a_0 * r0 + is_a_1 * r1 + is_a_2 * r2 + is_a_3 * r3
+}
+
 fn prev_reg_a<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
     let (is_a_0, is_a_1, is_a_2, is_a_3) = prev_a_selectors(row);
 
@@ -147,6 +174,19 @@ fn prev_reg_b<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
 
     is_b_0 * r0_prev + is_b_1 * r1_prev + is_b_2 * r2_prev + is_b_3 * r3_prev
 }
+
+// get current value of previously used register in b
+fn cur_reg_by_prev_b<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
+    let (is_b_0, is_b_1, is_b_2, is_b_3) = prev_b_selectors(row);
+
+    let r0 = col(row, TraceColumn::R0);
+    let r1 = col(row, TraceColumn::R1);
+    let r2 = col(row, TraceColumn::R2);
+    let r3 = col(row, TraceColumn::R3);
+
+    is_b_0 * r0 + is_b_1 * r1 + is_b_2 * r2 + is_b_3 * r3
+}
+
 pub struct BooleanityConstraint {
     pub column: TraceColumn,
 }
@@ -399,11 +439,75 @@ impl<F: PrimeField> Constraint<F> for JnzInverseConstraint {
     }
 
     fn eval(&self, row: &dyn RowAccess<F>) -> F {
-        let s_jnz = previous_col(row, TraceColumn::SJnz);
+        let s_jnz = previous_col(row, SJnz);
         let taken = previous_col(row, TraceColumn::JnzTaken);
         let inv = previous_col(row, TraceColumn::JnzTakenInv);
         let cond = prev_reg_a(row);
 
         (cond * inv - taken) * s_jnz * transition_selector(row)
+    }
+}
+
+pub struct ConstTransitionConstraint;
+
+impl<F: PrimeField> Constraint<F> for ConstTransitionConstraint {
+    fn name(&self) -> String {
+        "correct register transition after const".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_const = previous_col(row, SConst);
+        let imm_prev = previous_col(row, TraceColumn::Imm);
+        let dst_cur = cur_reg_by_prev_a(row);
+
+        transition_selector(row) * s_const * (dst_cur - imm_prev)
+    }
+}
+
+pub struct MovTransitionConstraint;
+
+impl<F: PrimeField> Constraint<F> for MovTransitionConstraint {
+    fn name(&self) -> String {
+        "correct register transition after mov".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_mov = previous_col(row, SMov);
+        let b_prev = prev_reg_b(row);
+        let dst_cur = cur_reg_by_prev_a(row);
+
+        transition_selector(row) * s_mov * (dst_cur - b_prev)
+    }
+}
+pub struct AddTransitionConstraint;
+
+impl<F: PrimeField> Constraint<F> for AddTransitionConstraint {
+    fn name(&self) -> String {
+        "correct register transition after add".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_add = previous_col(row, SAdd);
+        let b_prev = prev_reg_b(row);
+        let a_prev = prev_reg_a(row);
+        let dst_cur = cur_reg_by_prev_a(row);
+
+        transition_selector(row) * s_add * (dst_cur - (a_prev + b_prev))
+    }
+}
+pub struct SubTransitionConstraint;
+
+impl<F: PrimeField> Constraint<F> for SubTransitionConstraint {
+    fn name(&self) -> String {
+        "correct register transition after sub".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_sub = previous_col(row, SSub);
+        let b_prev = prev_reg_b(row);
+        let a_prev = prev_reg_a(row);
+        let dst_cur = cur_reg_by_prev_a(row);
+
+        transition_selector(row) * s_sub * (dst_cur - (a_prev - b_prev))
     }
 }
