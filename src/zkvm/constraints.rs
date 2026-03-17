@@ -73,6 +73,21 @@ pub fn build_vm_constraints<F: PrimeField>() -> Vec<Box<dyn Constraint<F>>> {
         Box::new(MovTransitionConstraint),
         Box::new(AddTransitionConstraint),
         Box::new(SubTransitionConstraint),
+        Box::new(RegisterPreservationConstraint {
+            register: TraceColumn::R0,
+        }),
+        Box::new(RegisterPreservationConstraint {
+            register: TraceColumn::R1,
+        }),
+        Box::new(RegisterPreservationConstraint {
+            register: TraceColumn::R2,
+        }),
+        Box::new(RegisterPreservationConstraint {
+            register: TraceColumn::R3,
+        }),
+        Box::new(HaltedPreservationConstraint),
+        Box::new(JnzTakenZeroWhenNotJnzConstraint),
+        Box::new(JnzTakenInvZeroWhenNotJnzConstraint),
     ]
 }
 
@@ -157,6 +172,38 @@ fn prev_reg_a<F: PrimeField>(row: &dyn RowAccess<F>) -> F {
     let r3_prev = previous_col(row, TraceColumn::R3);
 
     is_a_0 * r0_prev + is_a_1 * r1_prev + is_a_2 * r2_prev + is_a_3 * r3_prev
+}
+
+fn cur_reg_by_column<F: PrimeField>(row: &dyn RowAccess<F>, reg: TraceColumn) -> F {
+    match reg {
+        TraceColumn::R0 => col(row, TraceColumn::R0),
+        TraceColumn::R1 => col(row, TraceColumn::R1),
+        TraceColumn::R2 => col(row, TraceColumn::R2),
+        TraceColumn::R3 => col(row, TraceColumn::R3),
+        _ => panic!("expected register column"),
+    }
+}
+
+fn prev_reg_by_column<F: PrimeField>(row: &dyn RowAccess<F>, reg: TraceColumn) -> F {
+    match reg {
+        TraceColumn::R0 => previous_col(row, TraceColumn::R0),
+        TraceColumn::R1 => previous_col(row, TraceColumn::R1),
+        TraceColumn::R2 => previous_col(row, TraceColumn::R2),
+        TraceColumn::R3 => previous_col(row, TraceColumn::R3),
+        _ => panic!("expected register column"),
+    }
+}
+
+fn prev_a_selector_for_column<F: PrimeField>(row: &dyn RowAccess<F>, reg: TraceColumn) -> F {
+    let (is_a_0, is_a_1, is_a_2, is_a_3) = prev_a_selectors(row);
+
+    match reg {
+        TraceColumn::R0 => is_a_0,
+        TraceColumn::R1 => is_a_1,
+        TraceColumn::R2 => is_a_2,
+        TraceColumn::R3 => is_a_3,
+        _ => panic!("expected register column"),
+    }
 }
 
 fn prev_b_selectors<F: PrimeField>(row: &dyn RowAccess<F>) -> (F, F, F, F) {
@@ -479,6 +526,7 @@ impl<F: PrimeField> Constraint<F> for MovTransitionConstraint {
         transition_selector(row) * s_mov * (dst_cur - b_prev)
     }
 }
+
 pub struct AddTransitionConstraint;
 
 impl<F: PrimeField> Constraint<F> for AddTransitionConstraint {
@@ -495,6 +543,7 @@ impl<F: PrimeField> Constraint<F> for AddTransitionConstraint {
         transition_selector(row) * s_add * (dst_cur - (a_prev + b_prev))
     }
 }
+
 pub struct SubTransitionConstraint;
 
 impl<F: PrimeField> Constraint<F> for SubTransitionConstraint {
@@ -509,5 +558,87 @@ impl<F: PrimeField> Constraint<F> for SubTransitionConstraint {
         let dst_cur = cur_reg_by_prev_a(row);
 
         transition_selector(row) * s_sub * (dst_cur - (a_prev - b_prev))
+    }
+}
+
+pub struct RegisterPreservationConstraint {
+    pub register: TraceColumn,
+}
+
+impl<F: PrimeField> Constraint<F> for RegisterPreservationConstraint {
+    fn name(&self) -> String {
+        format!("register preservation for {}", self.register.name())
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let transition = transition_selector(row);
+
+        let s_const = previous_col(row, SConst);
+        let s_mov = previous_col(row, SMov);
+        let s_add = previous_col(row, SAdd);
+        let s_sub = previous_col(row, SSub);
+        let s_jmp = previous_col(row, SJmp);
+        let s_jnz = previous_col(row, SJnz);
+        let s_halt = previous_col(row, SHalt);
+
+        let write_ops = s_const + s_mov + s_add + s_sub;
+        let preserve_all_ops = s_jmp + s_jnz + s_halt;
+
+        let is_dst = prev_a_selector_for_column(row, self.register);
+
+        let r_cur = cur_reg_by_column(row, self.register);
+        let r_prev = prev_reg_by_column(row, self.register);
+
+        transition
+            * (write_ops * (F::one() - is_dst) * (r_cur - r_prev)
+                + preserve_all_ops * (r_cur - r_prev))
+    }
+}
+
+pub struct HaltedPreservationConstraint;
+
+impl<F: PrimeField> Constraint<F> for HaltedPreservationConstraint {
+    fn name(&self) -> String {
+        "halted bit is preserved on non-halt instructions".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let transition = transition_selector(row);
+        let s_halt_prev = previous_col(row, SHalt);
+
+        let halted_cur = col(row, TraceColumn::Halted);
+        let halted_prev = previous_col(row, TraceColumn::Halted);
+
+        transition * (F::one() - s_halt_prev) * (halted_cur - halted_prev)
+    }
+}
+
+pub struct JnzTakenZeroWhenNotJnzConstraint;
+
+impl<F: PrimeField> Constraint<F> for JnzTakenZeroWhenNotJnzConstraint {
+    fn name(&self) -> String {
+        "jnz_taken is zero on non-jnz rows".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_jnz = col(row, TraceColumn::SJnz);
+        let taken = col(row, TraceColumn::JnzTaken);
+
+        (F::one() - s_jnz) * taken
+    }
+}
+
+pub struct JnzTakenInvZeroWhenNotJnzConstraint;
+
+impl<F: PrimeField> Constraint<F> for JnzTakenInvZeroWhenNotJnzConstraint {
+    fn name(&self) -> String {
+        "jnz_taken_inv is zero on non-jnz rows".to_string()
+    }
+
+    fn eval(&self, row: &dyn RowAccess<F>) -> F {
+        let s_jnz = col(row, TraceColumn::SJnz);
+        let inv = col(row, TraceColumn::JnzTakenInv);
+
+        (F::one() - s_jnz) * inv
     }
 }
