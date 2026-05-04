@@ -369,6 +369,33 @@ cargo test vm_fib_proof_e2e
 cargo test prove_and_verify_fibonacci_vm_trace_with_current_air -- --nocapture
 ```
 
+### Run the CLI
+Create a small program file, for example ```examples/fib.zkvm```
+
+Generate a proof:
+```bash
+cargo run -- prove --src examples/fibonacci.zkvm
+```
+This writes two files by default:
+
+```bash
+proof.bin
+public_params.bin
+```
+Verify the proof:
+
+```bash
+cargo run -- verify --proof proof.bin --params public_params.bin
+```
+
+You can also choose custom output paths:
+
+```bash
+cargo run -- prove \
+  --src examples/fibonacci.zkvm \
+  --proof artifacts/fibonacci.proof.bin \
+  --params artifacts/fibonacci.params.bin
+```
 ---
 
 ## Current test coverage
@@ -545,7 +572,6 @@ Possible directions for improvement:
 - add zero-knowledge blinding
 - improve soundness/security parameter documentation
 - make the DSL more ergonomic
-- add a CLI for proving/verifying programs
 - add more negative tests for invalid traces
 - compare the design with real zkVM architectures
 
