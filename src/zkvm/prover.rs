@@ -11,7 +11,7 @@ use crate::{
 };
 use ark_ff::{FftField, PrimeField};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use thiserror::Error;
 
 /// API for constraint functions to access the table
@@ -89,7 +89,7 @@ pub enum ZkvmProveError {
     BadFriQuery,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct TraceQuery<F: PrimeField> {
     pub i: usize,
     pub current_row: Vec<F>, // at i
@@ -98,7 +98,7 @@ pub struct TraceQuery<F: PrimeField> {
     pub previous_row_path: AuthPath,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct ZkvmProof<F: PrimeField> {
     /// Commitments
     pub trace_root: Digest, // Merkle root for LDE evaluations

@@ -3,10 +3,10 @@ use crate::backend::{
 };
 use ark_ff::{FftField, Field, PrimeField};
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FriProof<F: PrimeField> {
     // Merkle roots per FRI step
     pub roots: Vec<Digest>,
@@ -16,21 +16,21 @@ pub struct FriProof<F: PrimeField> {
 }
 
 /// FriQuery contains folds for each step of FRI
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FriQuery<F: PrimeField> {
     pub rounds: Vec<FriRound<F>>,
 }
 
 /// FriRound contains left and right addend of FRI folding scheme and their auth
 /// f(x), f(-x)
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FriRound<F: PrimeField> {
     pub left: Opened<F>,
     pub right: Opened<F>,
 }
 
 /// Opened contains value and merkle tree auth path
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Opened<F: Field> {
     pub value: F,
     pub path: AuthPath,
@@ -50,7 +50,7 @@ const FINAL_POLY: &str = "final_poly";
 const BETA_I: &str = "beta_i";
 const QUERY_I: &str = "query_i";
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FriOptions<F: PrimeField> {
     pub max_degree: usize,
     pub max_remainder_degree: usize,

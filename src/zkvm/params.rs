@@ -1,7 +1,7 @@
 use crate::backend::{FriOptions, Transcript};
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
-
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 pub struct TranscriptLabels;
 
 impl TranscriptLabels {
@@ -33,7 +33,7 @@ pub struct PreprocessedTraceEvals<F> {
     pub last_row_selector: Vec<F>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, CanonicalSerialize, CanonicalDeserialize)]
 pub struct ZkvmPublicParameters<F: PrimeField> {
     pub trace_domain: Radix2EvaluationDomain<F>,
     pub lde_domain: Radix2EvaluationDomain<F>,

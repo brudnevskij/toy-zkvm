@@ -1,9 +1,10 @@
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use std::marker::PhantomData;
 use thiserror::Error;
 
 pub type Digest = [u8; 32];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AuthPath {
     pub nodes: Vec<Digest>,
     pub index: usize,
