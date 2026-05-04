@@ -1,0 +1,12 @@
+const r0, 0
+const r1, 1
+const r3, 20
+
+loop:
+mov r2, r1
+add r1, r0
+mov r0, r2
+const r2, 1
+sub r3, r2
+jnz r3, loop
+halt
