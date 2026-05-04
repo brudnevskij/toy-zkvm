@@ -335,7 +335,7 @@ and either accepts or rejects.
 ### Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/toy-zkvm.git
+git clone https://github.com/brudnevskij/toy-zkvm
 cd toy-zkvm
 ```
 
